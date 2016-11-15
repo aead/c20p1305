@@ -53,35 +53,6 @@
 #define B3 T1
 #define C3 T2
 #define D3 T3
-// Register and stack allocation for the AVX2 code
-#define rsStoreAVX2 (0*32)(BP)
-#define state1StoreAVX2 (1*32)(BP)
-#define state2StoreAVX2 (2*32)(BP)
-#define ctr0StoreAVX2 (3*32)(BP)
-#define ctr1StoreAVX2 (4*32)(BP)
-#define ctr2StoreAVX2 (5*32)(BP)
-#define ctr3StoreAVX2 (6*32)(BP)
-#define tmpStoreAVX2 (7*32)(BP) // 256 bytes on stack
-#define AA0 Y0
-#define AA1 Y5
-#define AA2 Y6
-#define AA3 Y7
-#define BB0 Y14
-#define BB1 Y9
-#define BB2 Y10
-#define BB3 Y11
-#define CC0 Y12
-#define CC1 Y13
-#define CC2 Y8
-#define CC3 Y15
-#define DD0 Y4
-#define DD1 Y1
-#define DD2 Y2
-#define DD3 Y3
-#define TT0 DD3
-#define TT1 AA3
-#define TT2 BB3
-#define TT3 CC3
 
 // No PALIGNR in Go ASM yet (but VPALIGNR is present).
 #define shiftB0Left BYTE $0x66; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xdb; BYTE $0x04 // PALIGNR $4, X3, X3
@@ -130,37 +101,21 @@
 	PSRLL  $25, B;          \
 	PXOR   T, B
 
-#define chachaQR_AVX2(A, B, C, D, T) \
-	VPADDD  B, A, A;            \
-	VPXOR   A, D, D;            \
-	VPSHUFB ·rol16<>(SB), D, D; \
-	VPADDD  D, C, C;            \
-	VPXOR   C, B, B;            \
-	VPSLLD  $12, B, T;          \
-	VPSRLD  $20, B, B;          \
-	VPXOR   T, B, B             \
-	VPADDD  B, A, A;            \
-	VPXOR   A, D, D;            \
-	VPSHUFB ·rol8<>(SB), D, D;  \
-	VPADDD  D, C, C;            \
-	VPXOR   C, B, B;            \
-	VPSLLD  $7, B, T;           \
-	VPSRLD  $25, B, B;          \
-	VPXOR   T, B, B
+#define CHACHA20_ROUND(A, B, C, D, T) \
+	chachaQR(A0, B0, C0, D0, T0); \
+	PSHUFD $0x39, B0, B0; \
+	PSHUFD $0x4E, C0, C0; \
+	PSHUFD $0x93, D0, D0; \
+	chachaQR(A0, B0, C0, D0, T0); \
+	PSHUFD $0x39, D0, D0; \	
+	PSHUFD $0x4E, C0, C0; \
+	PSHUFD $0x93, B0, B0
 
 #define polyAdd(S) ADDQ S, acc0; ADCQ 8+S, acc1; ADCQ $1, acc2
 #define polyMulStage1 MOVQ (0*8)(BP), AX; MOVQ AX, t2; MULQ acc0; MOVQ AX, t0; MOVQ DX, t1; MOVQ (0*8)(BP), AX; MULQ acc1; IMULQ acc2, t2; ADDQ AX, t1; ADCQ DX, t2
 #define polyMulStage2 MOVQ (1*8)(BP), AX; MOVQ AX, t3; MULQ acc0; ADDQ AX, t1; ADCQ $0, DX; MOVQ DX, acc0; MOVQ (1*8)(BP), AX; MULQ acc1; ADDQ AX, t2; ADCQ $0, DX
 #define polyMulStage3 IMULQ acc2, t3; ADDQ acc0, t2; ADCQ DX, t3
 #define polyMulReduceStage MOVQ t0, acc0; MOVQ t1, acc1; MOVQ t2, acc2; ANDQ $3, acc2; MOVQ t2, t0; ANDQ $-4, t0; MOVQ t3, t1; SHRQ $2, t2:t3; SHRQ $2, t3; ADDQ t0, acc0; ADCQ t1, acc1; ADCQ $0, acc2; ADDQ t2, acc0; ADCQ t3, acc1; ADCQ $0, acc2
-
-#define polyMulStage1_AVX2 MOVQ (0*8)(BP), DX; MOVQ DX, t2; MULXQ acc0, t0, t1; IMULQ acc2, t2; MULXQ acc1, AX, DX; ADDQ AX, t1; ADCQ DX, t2
-#define polyMulStage2_AVX2 MOVQ (1*8)(BP), DX; MULXQ acc0, acc0, AX; ADDQ acc0, t1; MULXQ acc1, acc1, t3; ADCQ acc1, t2; ADCQ $0, t3
-#define polyMulStage3_AVX2 IMULQ acc2, DX; ADDQ AX, t2; ADCQ DX, t3
-
-#define polyMul2 polyMulStage1; polyMulStage2; polyMulStage3; polyMulReduceStage
-
-#define polyMul POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 // The POLY1305_MUL makro is taken from the sum_amd64.s file in /x/crypto/poly1305
 #define POLY1305_MUL(h0, h1, h2, r0, r1, t0, t1, t2, t3) \
@@ -205,42 +160,36 @@
 	ADCQ  t3, h1;                  \
 	ADCQ  $0, h2
 
-#define polyMulAVX2 polyMulStage1_AVX2; polyMulStage2_AVX2; polyMulStage3_AVX2; polyMulReduceStage
-
-
 TEXT polyHashADInternal(SB), NOSPLIT, $0
-	// adp points to beginning of additional data
-	// itr2 holds ad length
 	XORQ acc0, acc0
 	XORQ acc1, acc1
 	XORQ acc2, acc2
-	CMPQ itr2, $13
+
+	CMPQ itr2, $13 // Special treatment for TLS
 	JNE  hashADLoop
 
-// Special treatment for the TLS case of 13 bytes
 openFastTLSAD:
-	MOVQ (adp), acc0
+	MOVQ 0(adp), acc0
 	MOVQ 5(adp), acc1
 	SHRQ $24, acc1
 	MOVQ $1, acc2
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	RET
 
 hashADLoop:
-	// Hash in 16 byte chunks
 	CMPQ itr2, $16
 	JB   hashADTail
 	polyAdd(0(adp))
-	LEAQ (1*16)(adp), adp
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
+
+	LEAQ 16(adp), adp
 	SUBQ $16, itr2
-	polyMul
 	JMP  hashADLoop
 
 hashADTail:
 	CMPQ itr2, $0
 	JE   hashADDone
 
-	// Hash last < 16 byte tail
 	XORQ t0, t0
 	XORQ t1, t1
 	XORQ t2, t2
@@ -256,10 +205,11 @@ hashADTailLoop:
 	JNE  hashADTailLoop
 
 hashADTailFinish:
-	ADDQ t0, acc0; ADCQ t1, acc1; ADCQ $1, acc2
-	polyMul
+	ADDQ t0, acc0; 
+	ADCQ t1, acc1; 
+	ADCQ $1, acc2
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
-	// Finished AD
 hashADDone:
 	RET
 
@@ -294,21 +244,20 @@ TEXT ·chacha20Poly1305Open(SB), 0, $288-97
 	MOVQ $10, itr2
 
 openSSEPreparePolyKey:
-	chachaQR(A0, B0, C0, D0, T0)
-	shiftB0Left;  shiftC0Left; shiftD0Left
-	chachaQR(A0, B0, C0, D0, T0)
-	shiftB0Right; shiftC0Right; shiftD0Right
+	CHACHA20_ROUND(A0, B0, C0, D0, T0)
 	DECQ          itr2
 	JNE           openSSEPreparePolyKey
 
 	// A0|B0 hold the Poly1305 32-byte key, C0,D0 can be discarded
-	PADDL ·chacha20Constants<>(SB), A0; PADDL state1Store, B0
+	PADDL ·chacha20Constants<>(SB), A0; 
+	PADDL state1Store, B0
 
 	// Clamp and store the key
 	PAND ·polyClampMask<>(SB), A0
-	MOVO A0, rStore; MOVO B0, sStore
+	MOVO A0, rStore;
+	MOVO B0, sStore
 
-	// Hash AAD
+	// Hash AD
 	MOVQ ad_len+80(FP), itr2
 	CALL polyHashADInternal(SB)
 
@@ -331,34 +280,55 @@ openSSEMainLoop:
 
 openSSEInternalLoop:
 	MOVO          C3, tmpStore
-	chachaQR(A0, B0, C0, D0, C3); chachaQR(A1, B1, C1, D1, C3); chachaQR(A2, B2, C2, D2, C3)
+	chachaQR(A0, B0, C0, D0, C3); 
+	chachaQR(A1, B1, C1, D1, C3); 
+	chachaQR(A2, B2, C2, D2, C3)
 	MOVO          tmpStore, C3
 	MOVO          C1, tmpStore
 	chachaQR(A3, B3, C3, D3, C1)
 	MOVO          tmpStore, C1
+	PSHUFD $0x39, B0, B0
+	PSHUFD $0x39, B1, B1
+	PSHUFD $0x39, B2, B2
+	PSHUFD $0x39, B3, B3
+	PSHUFD $0x4E, C0, C0
+	PSHUFD $0x4E, C1, C1
+	PSHUFD $0x4E, C2, C2
+	PSHUFD $0x4E, C3, C3
+	PSHUFD $0x93, D0, D0
+	PSHUFD $0x93, D1, D1
+	PSHUFD $0x93, D2, D2
+	PSHUFD $0x93, D3, D3
+	
 	polyAdd(0(itr2))
-	shiftB0Left;  shiftB1Left; shiftB2Left; shiftB3Left
-	shiftC0Left;  shiftC1Left; shiftC2Left; shiftC3Left
-	shiftD0Left;  shiftD1Left; shiftD2Left; shiftD3Left
-	polyMulStage1
-	polyMulStage2
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ          (2*8)(itr2), itr2
+	
 	MOVO          C3, tmpStore
-	chachaQR(A0, B0, C0, D0, C3); chachaQR(A1, B1, C1, D1, C3); chachaQR(A2, B2, C2, D2, C3)
+	chachaQR(A0, B0, C0, D0, C3); 
+	chachaQR(A1, B1, C1, D1, C3); 
+	chachaQR(A2, B2, C2, D2, C3)
 	MOVO          tmpStore, C3
 	MOVO          C1, tmpStore
-	polyMulStage3
 	chachaQR(A3, B3, C3, D3, C1)
 	MOVO          tmpStore, C1
-	polyMulReduceStage
-	shiftB0Right; shiftB1Right; shiftB2Right; shiftB3Right
-	shiftC0Right; shiftC1Right; shiftC2Right; shiftC3Right
-	shiftD0Right; shiftD1Right; shiftD2Right; shiftD3Right
+	PSHUFD $0x93, B0, B0
+	PSHUFD $0x93, B1, B1
+	PSHUFD $0x93, B2, B2
+	PSHUFD $0x93, B3, B3
+	PSHUFD $0x4E, C0, C0
+	PSHUFD $0x4E, C1, C1
+	PSHUFD $0x4E, C2, C2
+	PSHUFD $0x4E, C3, C3
+	PSHUFD $0x39, D0, D0
+	PSHUFD $0x39, D1, D1
+	PSHUFD $0x39, D2, D2
+	PSHUFD $0x39, D3, D3
 	DECQ          itr1
 	JGE           openSSEInternalLoop
 
 	polyAdd(0(itr2))
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ (2*8)(itr2), itr2
 
 	CMPQ itr1, $-6
@@ -372,22 +342,11 @@ openSSEInternalLoop:
 
 	// Load - xor - store
 	MOVO  D3, tmpStore
-	MOVOU (0*16)(inp), D3; PXOR D3, A0; MOVOU A0, (0*16)(oup)
-	MOVOU (1*16)(inp), D3; PXOR D3, B0; MOVOU B0, (1*16)(oup)
-	MOVOU (2*16)(inp), D3; PXOR D3, C0; MOVOU C0, (2*16)(oup)
-	MOVOU (3*16)(inp), D3; PXOR D3, D0; MOVOU D0, (3*16)(oup)
-	MOVOU (4*16)(inp), D0; PXOR D0, A1; MOVOU A1, (4*16)(oup)
-	MOVOU (5*16)(inp), D0; PXOR D0, B1; MOVOU B1, (5*16)(oup)
-	MOVOU (6*16)(inp), D0; PXOR D0, C1; MOVOU C1, (6*16)(oup)
-	MOVOU (7*16)(inp), D0; PXOR D0, D1; MOVOU D1, (7*16)(oup)
-	MOVOU (8*16)(inp), D0; PXOR D0, A2; MOVOU A2, (8*16)(oup)
-	MOVOU (9*16)(inp), D0; PXOR D0, B2; MOVOU B2, (9*16)(oup)
-	MOVOU (10*16)(inp), D0; PXOR D0, C2; MOVOU C2, (10*16)(oup)
-	MOVOU (11*16)(inp), D0; PXOR D0, D2; MOVOU D2, (11*16)(oup)
-	MOVOU (12*16)(inp), D0; PXOR D0, A3; MOVOU A3, (12*16)(oup)
-	MOVOU (13*16)(inp), D0; PXOR D0, B3; MOVOU B3, (13*16)(oup)
-	MOVOU (14*16)(inp), D0; PXOR D0, C3; MOVOU C3, (14*16)(oup)
-	MOVOU (15*16)(inp), D0; PXOR tmpStore, D0; MOVOU D0, (15*16)(oup)
+	XOR(oup, inp, 0, A0, B0, C0, D0, D3)
+	XOR(oup, inp, 64, A1, B1, C1, D1, D0)
+	XOR(oup, inp, 128, A2, B2, C2, D2, D0)
+	XOR(oup, inp, 192, A3, B3, C3, tmpStore, D0)
+
 	LEAQ  256(inp), inp
 	LEAQ  256(oup), oup
 	SUBQ  $256, inl
@@ -408,7 +367,7 @@ openSSEMainLoopDone:
 openSSEFinalize:
 	// Hash in the PT, AAD lengths
 	ADDQ ad_len+80(FP), acc0; ADCQ src_len+56(FP), acc1; ADCQ $1, acc2
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 	// Final reduce
 	MOVQ    acc0, t0
@@ -485,7 +444,7 @@ openSSE128Open:
 	MOVOU (inp), T0; PXOR T0, A1; MOVOU A1, (oup)
 	LEAQ  (1*16)(inp), inp
 	LEAQ  (1*16)(oup), oup
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 	// Shift the stream "left"
 	MOVO B1, A1
@@ -522,7 +481,7 @@ openSSETail16Store:
 	DECQ   inl
 	JNE    openSSETail16Store
 	ADDQ   t0, acc0; ADCQ t1, acc1; ADCQ $1, acc2
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	JMP    openSSEFinalize
 
 // ----------------------------------------------------------------------------
@@ -538,7 +497,7 @@ openSSETail64:
 openSSETail64LoopA:
 	// Perform ChaCha rounds, while hashing the remaining input
 	polyAdd(0(inp)(itr2*1))
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	SUBQ $16, itr1
 
 openSSETail64LoopB:
@@ -587,7 +546,7 @@ openSSETail128:
 openSSETail128LoopA:
 	// Perform ChaCha rounds, while hashing the remaining input
 	polyAdd(0(inp)(itr2*1))
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 openSSETail128LoopB:
 	ADDQ          $16, itr2
@@ -636,7 +595,7 @@ openSSETail192:
 openSSLTail192LoopA:
 	// Perform ChaCha rounds, while hashing the remaining input
 	polyAdd(0(inp)(itr2*1))
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 openSSLTail192LoopB:
 	ADDQ         $16, itr2
@@ -660,13 +619,13 @@ openSSLTail192LoopB:
 	JB   openSSLTail192Store
 
 	polyAdd(160(inp))
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 	CMPQ inl, $192
 	JB   openSSLTail192Store
 
 	polyAdd(176(inp))
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 openSSLTail192Store:
 	PADDL ·chacha20Constants<>(SB), A0; PADDL ·chacha20Constants<>(SB), A1; PADDL ·chacha20Constants<>(SB), A2
@@ -733,7 +692,7 @@ openSSETail256Loop:
 
 openSSETail256HashLoop:
 	polyAdd(0(inp)(itr2*1))
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	ADDQ $2*8, itr2
 	CMPQ itr2, itr1
 	JB   openSSETail256HashLoop
@@ -917,7 +876,7 @@ sealSSEInnerLoop:
 	DECQ          itr2
 	JGE           sealSSEInnerLoop
 	polyAdd(0(oup))
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ          (2*8)(oup), oup
 	DECQ          itr1
 	JG            sealSSEInnerLoop
@@ -989,7 +948,7 @@ sealSSETail64:
 sealSSETail64LoopA:
 	// Perform ChaCha rounds, while hashing the prevsiosly encrpyted ciphertext
 	polyAdd(0(oup))
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ 16(oup), oup
 
 sealSSETail64LoopB:
@@ -998,7 +957,7 @@ sealSSETail64LoopB:
 	chachaQR(A1, B1, C1, D1, T1)
 	shiftB1Right; shiftC1Right; shiftD1Right
 	polyAdd(0(oup))
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ          16(oup), oup
 
 	DECQ itr1
@@ -1023,7 +982,7 @@ sealSSETail128:
 sealSSETail128LoopA:
 	// Perform ChaCha rounds, while hashing the prevsiosly encrpyted ciphertext
 	polyAdd(0(oup))
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ 16(oup), oup
 
 sealSSETail128LoopB:
@@ -1031,7 +990,7 @@ sealSSETail128LoopB:
 	shiftB0Left;  shiftC0Left; shiftD0Left
 	shiftB1Left;  shiftC1Left; shiftD1Left
 	polyAdd(0(oup))
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ          16(oup), oup
 	chachaQR(A0, B0, C0, D0, T0); chachaQR(A1, B1, C1, D1, T0)
 	shiftB0Right; shiftC0Right; shiftD0Right
@@ -1069,7 +1028,7 @@ sealSSETail192:
 sealSSETail192LoopA:
 	// Perform ChaCha rounds, while hashing the prevsiosly encrpyted ciphertext
 	polyAdd(0(oup))
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ 16(oup), oup
 
 sealSSETail192LoopB:
@@ -1079,7 +1038,7 @@ sealSSETail192LoopB:
 	shiftB2Left; shiftC2Left; shiftD2Left
 
 	polyAdd(0(oup))
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ 16(oup), oup
 
 	chachaQR(A0, B0, C0, D0, T0); chachaQR(A1, B1, C1, D1, T0); chachaQR(A2, B2, C2, D2, T0)
@@ -1156,7 +1115,7 @@ sealSSE128SealHash:
 	CMPQ itr1, $16
 	JB   sealSSE128Seal
 	polyAdd(0(oup))
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 	SUBQ $16, itr1
 	ADDQ $16, oup
@@ -1180,7 +1139,7 @@ sealSSE128Seal:
 	PSRLDQ $8, A1
 	MOVQ   A1, t1
 	ADDQ   t0, acc0; ADCQ t1, acc1; ADCQ $1, acc2
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 	// Shift the stream "left"
 	MOVO B1, A1
@@ -1224,7 +1183,7 @@ sealSSETailLoadLoop:
 	PSRLDQ $8, A1
 	MOVQ   A1, t1
 	ADDQ   t0, acc0; ADCQ t1, acc1; ADCQ $1, acc2
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 	ADDQ inl, oup
 
@@ -1233,7 +1192,7 @@ sealSSEFinalize:
 	ADDQ ad_len+80(FP), acc0
 	ADCQ src_len+56(FP), acc1
 	ADCQ $1, acc2
-	polyMul
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 	// Final reduce
 	MOVQ    acc0, t0

@@ -89,3 +89,17 @@ GLOBL ·avx2IncMask<>(SB), (NOPTR+RODATA), $32
 GLOBL ·avx2InitMask<>(SB), (NOPTR+RODATA), $32
 GLOBL ·polyClampMask<>(SB), (NOPTR+RODATA), $32
 GLOBL ·andMask<>(SB), (NOPTR+RODATA), $240
+
+#define XOR(dst, src, off, A, B, C, D, T) \
+    MOVOU 0+off(src), T; \
+    PXOR A, T; \
+    MOVOU T, 0+off(dst); \
+    MOVOU 16+off(src), T; \
+    PXOR B, T; \
+    MOVOU T, 16+off(dst); \
+    MOVOU 32+off(src), T; \
+    PXOR C, T; \
+    MOVOU T, 32+off(dst); \
+    MOVOU 48+off(src), T; \
+    PXOR D, T; \
+    MOVOU T, 48+off(dst)
