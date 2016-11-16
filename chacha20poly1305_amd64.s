@@ -54,7 +54,7 @@
 #define C3 T2
 #define D3 T3
 
-#define chachaQR(A, B, C, D, T) \
+#define CHACHA20_QROUND(A, B, C, D, T) \
 	PADDD  B, A;            \
 	PXOR   A, D;            \
 	PSHUFB ·rol16<>(SB), D; \
@@ -73,8 +73,6 @@
 	PSLLL  $7, T;           \
 	PSRLL  $25, B;          \
 	PXOR   T, B
-
-#define CHACHA20_QROUND(A, B, C, D, T) chachaQR(A, B, C, D, T)
 
 #define CHACHA20_SHUF(c0, c1, c2, B, C, D) \
 	PSHUFD $c0, B, B; \
@@ -132,9 +130,8 @@ TEXT polyHashADInternal(SB), NOSPLIT, $0
 	XORQ acc2, acc2
 
 	CMPQ itr2, $13  // Special treatment for TLS
-	JNE  hashADLoop
+	JNE  hash_additional_data_loop
 
-openFastTLSAD:
 	MOVQ 0(adp), acc0
 	MOVQ 5(adp), acc1
 	SHRQ $24, acc1
@@ -142,41 +139,41 @@ openFastTLSAD:
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	RET
 
-hashADLoop:
+hash_additional_data_loop:
 	CMPQ itr2, $16
-	JB   hashADTail
+	JB   hash_additional_data_finalize
+
 	polyAdd(0(adp))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 	LEAQ 16(adp), adp
 	SUBQ $16, itr2
-	JMP  hashADLoop
+	JMP  hash_additional_data_loop
 
-hashADTail:
+hash_additional_data_finalize:
 	CMPQ itr2, $0
-	JE   hashADDone
+	JE   hash_additional_data_done
 
 	XORQ t0, t0
 	XORQ t1, t1
 	XORQ t2, t2
 	ADDQ itr2, adp
 
-hashADTailLoop:
+hash_additional_data_flush:
 	SHLQ $8, t1:t0
 	SHLQ $8, t0
 	MOVB -1(adp), t2
 	XORQ t2, t0
 	DECQ adp
 	DECQ itr2
-	JNE  hashADTailLoop
+	JNE  hash_additional_data_flush
 
-hashADTailFinish:
 	ADDQ t0, acc0
 	ADCQ t1, acc1
 	ADCQ $1, acc2
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
-hashADDone:
+hash_additional_data_done:
 	RET
 
 // ----------------------------------------------------------------------------
@@ -316,37 +313,6 @@ openSSEMainLoopDone:
 	CMPQ  inl, $192
 	JBE   openSSETail192
 	JMP   openSSETail256
-
-openSSEFinalize:
-	ADDQ ad_len+80(FP), acc0  // Hash length of additional data
-	ADCQ src_len+56(FP), acc1 // Hash length of ciphertext
-	ADCQ $1, acc2
-	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
-
-	// Final reduce
-	MOVQ    acc0, t0
-	MOVQ    acc1, t1
-	SUBQ    $-5, acc0
-	SBBQ    $-1, acc1
-	SBBQ    $3, acc2
-	CMOVQCS t0, acc0
-	CMOVQCS t1, acc1
-
-	// Add in the "s" part of the key
-	ADDQ 0+sStore, acc0
-	ADCQ 8+sStore, acc1
-
-	// Finally, constant time compare to the tag at the end of the message
-	XORQ    AX, AX
-	MOVQ    $1, DX
-	XORQ    (0*8)(inp), acc0
-	XORQ    (1*8)(inp), acc1
-	ORQ     acc1, acc0
-	CMOVQEQ DX, AX
-
-	// Return true iff tags are equal
-	MOVB AX, ret+96(FP)
-	RET
 
 // ----------------------------------------------------------------------------
 // Special optimization for buffers smaller than 129 bytes
@@ -671,15 +637,46 @@ openSSETail256HashLoop:
 	XOR(oup, inp, 64, A1, B1, C1, D1, D3)
 	XOR(oup, inp, 128, A2, B2, C2, D2, D3)
 
-	LEAQ  192(inp), inp
-	LEAQ  192(oup), oup
-	SUBQ  $192, inl
-	MOVO  A3, A0
-	MOVO  B3, B0
-	MOVO  C3, C0
-	MOVO  tmpStore, D0
+	LEAQ 192(inp), inp
+	LEAQ 192(oup), oup
+	SUBQ $192, inl
+	MOVO A3, A0
+	MOVO B3, B0
+	MOVO C3, C0
+	MOVO tmpStore, D0
 
 	JMP openSSETail64DecLoop
+
+openSSEFinalize:
+	ADDQ ad_len+80(FP), acc0  // Hash length of additional data
+	ADCQ src_len+56(FP), acc1 // Hash length of ciphertext
+	ADCQ $1, acc2
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
+
+	// Final reduce
+	MOVQ    acc0, t0
+	MOVQ    acc1, t1
+	SUBQ    $-5, acc0
+	SBBQ    $-1, acc1
+	SBBQ    $3, acc2
+	CMOVQCS t0, acc0
+	CMOVQCS t1, acc1
+
+	// Add in the "s" part of the key
+	ADDQ 0+sStore, acc0
+	ADCQ 8+sStore, acc1
+
+	// Finally, constant time compare to the tag at the end of the message
+	XORQ    AX, AX
+	MOVQ    $1, DX
+	XORQ    (0*8)(inp), acc0
+	XORQ    (1*8)(inp), acc1
+	ORQ     acc1, acc0
+	CMOVQEQ DX, AX
+
+	// Return true iff tags are equal
+	MOVB AX, ret+96(FP)
+	RET
 
 // ----------------------------------------------------------------------------
 // ----------------------------------------------------------------------------
@@ -719,33 +716,33 @@ TEXT ·chacha20Poly1305Seal(SB), 0, $288-96
 	MOVQ $10, itr2
 
 sealSSEIntroLoop:
-	MOVO         C3, tmpStore
+	MOVO C3, tmpStore
 	CHACHA20_QROUND(A0, B0, C0, D0, C3)
 	CHACHA20_QROUND(A1, B1, C1, D1, C3)
 	CHACHA20_QROUND(A2, B2, C2, D2, C3)
-	MOVO         tmpStore, C3
-	MOVO         C1, tmpStore
+	MOVO tmpStore, C3
+	MOVO C1, tmpStore
 	CHACHA20_QROUND(A3, B3, C3, D3, C1)
-	MOVO         tmpStore, C1
+	MOVO tmpStore, C1
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B0, C0, D0)
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B1, C1, D1)
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B2, C2, D2)
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B3, C3, D3)
 
-	MOVO          C3, tmpStore
+	MOVO C3, tmpStore
 	CHACHA20_QROUND(A0, B0, C0, D0, C3)
 	CHACHA20_QROUND(A1, B1, C1, D1, C3)
 	CHACHA20_QROUND(A2, B2, C2, D2, C3)
-	MOVO          tmpStore, C3
-	MOVO          C1, tmpStore
+	MOVO tmpStore, C3
+	MOVO C1, tmpStore
 	CHACHA20_QROUND(A3, B3, C3, D3, C1)
-	MOVO          tmpStore, C1
+	MOVO tmpStore, C1
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B0, C0, D0)
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B1, C1, D1)
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B2, C2, D2)
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B3, C3, D3)
-	DECQ          itr2
-	JNE           sealSSEIntroLoop
+	DECQ itr2
+	JNE  sealSSEIntroLoop
 
 	// Add in the state
 	PADDD ·chacha20Constants<>(SB), A0; PADDD ·chacha20Constants<>(SB), A1; PADDD ·chacha20Constants<>(SB), A2; PADDD ·chacha20Constants<>(SB), A3
@@ -763,7 +760,7 @@ sealSSEIntroLoop:
 	CALL polyHashADInternal(SB)
 
 	XOR(oup, inp, 0, A1, B1, C1, D1, A0)
-	XOR(oup, inp, 64, A2, B2, C2, D2, A0) 
+	XOR(oup, inp, 64, A2, B2, C2, D2, A0)
 
 	MOVQ $128, itr1
 	SUBQ $128, inl
@@ -774,7 +771,7 @@ sealSSEIntroLoop:
 	CMPQ inl, $64
 	JBE  sealSSE128SealHash
 
-	//XOR(oup, inp, 0, A3, B3, C3, D3, A0)
+	// XOR(oup, inp, 0, A3, B3, C3, D3, A0)
 	MOVOU (0*16)(inp), A0; MOVOU (1*16)(inp), B0; MOVOU (2*16)(inp), C0; MOVOU (3*16)(inp), D0
 	PXOR  A0, A3; PXOR B0, B3; PXOR C0, C3; PXOR D0, D3
 	MOVOU A3, (8*16)(oup); MOVOU B3, (9*16)(oup); MOVOU C3, (10*16)(oup); MOVOU D3, (11*16)(oup)
@@ -804,14 +801,14 @@ sealSSEMainLoop:
 	MOVO D0, ctr0Store; MOVO D1, ctr1Store; MOVO D2, ctr2Store; MOVO D3, ctr3Store
 
 sealSSEInnerLoop:
-	MOVO         C3, tmpStore
+	MOVO C3, tmpStore
 	CHACHA20_QROUND(A0, B0, C0, D0, C3)
 	CHACHA20_QROUND(A1, B1, C1, D1, C3)
 	CHACHA20_QROUND(A2, B2, C2, D2, C3)
-	MOVO         tmpStore, C3
-	MOVO         C1, tmpStore
+	MOVO tmpStore, C3
+	MOVO C1, tmpStore
 	CHACHA20_QROUND(A3, B3, C3, D3, C1)
-	MOVO         tmpStore, C1
+	MOVO tmpStore, C1
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B0, C0, D0)
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B1, C1, D1)
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B2, C2, D2)
@@ -819,28 +816,28 @@ sealSSEInnerLoop:
 
 	polyAdd(0(oup))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
-	LEAQ          16(oup), oup
+	LEAQ 16(oup), oup
 
-	MOVO          C3, tmpStore
+	MOVO C3, tmpStore
 	CHACHA20_QROUND(A0, B0, C0, D0, C3)
 	CHACHA20_QROUND(A1, B1, C1, D1, C3)
 	CHACHA20_QROUND(A2, B2, C2, D2, C3)
-	MOVO          tmpStore, C3
-	MOVO          C1, tmpStore
+	MOVO tmpStore, C3
+	MOVO C1, tmpStore
 	CHACHA20_QROUND(A3, B3, C3, D3, C1)
-	MOVO          tmpStore, C1
+	MOVO tmpStore, C1
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B0, C0, D0)
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B1, C1, D1)
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B2, C2, D2)
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B3, C3, D3)
-	DECQ          itr2
-	JGE           sealSSEInnerLoop
+	DECQ itr2
+	JGE  sealSSEInnerLoop
 
 	polyAdd(0(oup))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
-	LEAQ          (2*8)(oup), oup
-	DECQ          itr1
-	JG            sealSSEInnerLoop
+	LEAQ (2*8)(oup), oup
+	DECQ itr1
+	JG   sealSSEInnerLoop
 
 	// Add in the state
 	PADDD ·chacha20Constants<>(SB), A0; PADDD ·chacha20Constants<>(SB), A1; PADDD ·chacha20Constants<>(SB), A2; PADDD ·chacha20Constants<>(SB), A3
@@ -853,17 +850,17 @@ sealSSEInnerLoop:
 	XOR(oup, inp, 0, A0, B0, C0, D0, D3)
 	XOR(oup, inp, 64, A1, B1, C1, D1, D3)
 	XOR(oup, inp, 128, A2, B2, C2, D2, D3)
-	MOVO  tmpStore, D3
+	MOVO tmpStore, D3
 
-	ADDQ  $192, inp
-	MOVQ  $192, itr1
-	SUBQ  $192, inl
-	MOVO  A3, A1
-	MOVO  B3, B1
-	MOVO  C3, C1
-	MOVO  D3, D1
-	CMPQ  inl, $64
-	JBE   sealSSE128SealHash
+	ADDQ $192, inp
+	MOVQ $192, itr1
+	SUBQ $192, inl
+	MOVO A3, A1
+	MOVO B3, B1
+	MOVO C3, C1
+	MOVO D3, D1
+	CMPQ inl, $64
+	JBE  sealSSE128SealHash
 
 	MOVOU (0*16)(inp), A0; MOVOU (1*16)(inp), B0; MOVOU (2*16)(inp), C0; MOVOU (3*16)(inp), D0
 	PXOR  A0, A3; PXOR B0, B3; PXOR C0, C3; PXOR D0, D3
@@ -879,13 +876,13 @@ sealSSEInnerLoop:
 	TESTQ inl, inl
 	JE    sealSSE128SealHash
 
-	MOVQ  $6, itr1
-	CMPQ  inl, $64
-	JBE   sealSSETail64
+	MOVQ $6, itr1
+	CMPQ inl, $64
+	JBE  sealSSETail64
 
-	CMPQ  inl, $128
-	JBE   sealSSETail128
-	JMP   sealSSETail192
+	CMPQ inl, $128
+	JBE  sealSSETail128
+	JMP  sealSSETail192
 
 // ----------------------------------------------------------------------------
 // Special optimization for the last 64 bytes of plaintext
@@ -911,7 +908,7 @@ sealSSETail64LoopB:
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B1, C1, D1)
 	polyAdd(0(oup))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
-	LEAQ          16(oup), oup
+	LEAQ 16(oup), oup
 
 	DECQ itr1
 	JG   sealSSETail64LoopA
@@ -945,7 +942,7 @@ sealSSETail128LoopB:
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B1, C1, D1)
 	polyAdd(0(oup))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
-	LEAQ          16(oup), oup
+	LEAQ 16(oup), oup
 	CHACHA20_QROUND(A0, B0, C0, D0, T0)
 	CHACHA20_QROUND(A1, B1, C1, D1, T0)
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B0, C0, D0)
@@ -1016,7 +1013,7 @@ sealSSETail192LoopB:
 
 	XOR(oup, inp, 0, A0, B0, C0, D0, T0)
 	XOR(oup, inp, 64, A1, B1, C1, D1, T0)
-	
+
 	MOVO A2, A1
 	MOVO B2, B1
 	MOVO C2, C1
@@ -1050,8 +1047,8 @@ sealSSE128InnerCipherLoop:
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B0, C0, D0)
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B1, C1, D1)
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B2, C2, D2)
-	DECQ          itr2
-	JNE           sealSSE128InnerCipherLoop
+	DECQ itr2
+	JNE  sealSSE128InnerCipherLoop
 
 	// A0|B0 hold the Poly1305 32-byte key, C0,D0 can be discarded
 	PADDL ·chacha20Constants<>(SB), A0; PADDL ·chacha20Constants<>(SB), A1; PADDL ·chacha20Constants<>(SB), A2
