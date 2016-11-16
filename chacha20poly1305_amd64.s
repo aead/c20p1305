@@ -54,32 +54,6 @@
 #define C3 T2
 #define D3 T3
 
-// No PALIGNR in Go ASM yet (but VPALIGNR is present).
-#define shiftB0Left BYTE $0x66; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xdb; BYTE $0x04 // PALIGNR $4, X3, X3
-#define shiftB1Left BYTE $0x66; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xe4; BYTE $0x04 // PALIGNR $4, X4, X4
-#define shiftB2Left BYTE $0x66; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xed; BYTE $0x04 // PALIGNR $4, X5, X5
-#define shiftB3Left BYTE $0x66; BYTE $0x45; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xed; BYTE $0x04 // PALIGNR $4, X13, X13
-#define shiftC0Left BYTE $0x66; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xf6; BYTE $0x08 // PALIGNR $8, X6, X6
-#define shiftC1Left BYTE $0x66; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xff; BYTE $0x08 // PALIGNR $8, X7, X7
-#define shiftC2Left BYTE $0x66; BYTE $0x45; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xc0; BYTE $0x08 // PALIGNR $8, X8, X8
-#define shiftC3Left BYTE $0x66; BYTE $0x45; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xf6; BYTE $0x08 // PALIGNR $8, X14, X14
-#define shiftD0Left BYTE $0x66; BYTE $0x45; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xc9; BYTE $0x0c // PALIGNR $12, X9, X9
-#define shiftD1Left BYTE $0x66; BYTE $0x45; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xd2; BYTE $0x0c // PALIGNR $12, X10, X10
-#define shiftD2Left BYTE $0x66; BYTE $0x45; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xdb; BYTE $0x0c // PALIGNR $12, X11, X11
-#define shiftD3Left BYTE $0x66; BYTE $0x45; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xff; BYTE $0x0c // PALIGNR $12, X15, X15
-#define shiftB0Right BYTE $0x66; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xdb; BYTE $0x0c // PALIGNR $12, X3, X3
-#define shiftB1Right BYTE $0x66; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xe4; BYTE $0x0c // PALIGNR $12, X4, X4
-#define shiftB2Right BYTE $0x66; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xed; BYTE $0x0c // PALIGNR $12, X5, X5
-#define shiftB3Right BYTE $0x66; BYTE $0x45; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xed; BYTE $0x0c // PALIGNR $12, X13, X13
-#define shiftC0Right shiftC0Left
-#define shiftC1Right shiftC1Left
-#define shiftC2Right shiftC2Left
-#define shiftC3Right shiftC3Left
-#define shiftD0Right BYTE $0x66; BYTE $0x45; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xc9; BYTE $0x04 // PALIGNR $4, X9, X9
-#define shiftD1Right BYTE $0x66; BYTE $0x45; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xd2; BYTE $0x04 // PALIGNR $4, X10, X10
-#define shiftD2Right BYTE $0x66; BYTE $0x45; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xdb; BYTE $0x04 // PALIGNR $4, X11, X11
-#define shiftD3Right BYTE $0x66; BYTE $0x45; BYTE $0x0f; BYTE $0x3a; BYTE $0x0f; BYTE $0xff; BYTE $0x04 // PALIGNR $4, X15, X15
-
 #define chachaQR(A, B, C, D, T) \
 	PADDD  B, A;            \
 	PXOR   A, D;            \
@@ -108,10 +82,6 @@
 	PSHUFD $c2, D, D
 
 #define polyAdd(S) ADDQ S, acc0; ADCQ 8+S, acc1; ADCQ $1, acc2
-#define polyMulStage1 MOVQ (0*8)(BP), AX; MOVQ AX, t2; MULQ acc0; MOVQ AX, t0; MOVQ DX, t1; MOVQ (0*8)(BP), AX; MULQ acc1; IMULQ acc2, t2; ADDQ AX, t1; ADCQ DX, t2
-#define polyMulStage2 MOVQ (1*8)(BP), AX; MOVQ AX, t3; MULQ acc0; ADDQ AX, t1; ADCQ $0, DX; MOVQ DX, acc0; MOVQ (1*8)(BP), AX; MULQ acc1; ADDQ AX, t2; ADCQ $0, DX
-#define polyMulStage3 IMULQ acc2, t3; ADDQ acc0, t2; ADCQ DX, t3
-#define polyMulReduceStage MOVQ t0, acc0; MOVQ t1, acc1; MOVQ t2, acc2; ANDQ $3, acc2; MOVQ t2, t0; ANDQ $-4, t0; MOVQ t3, t1; SHRQ $2, t2:t3; SHRQ $2, t3; ADDQ t0, acc0; ADCQ t1, acc1; ADCQ $0, acc2; ADDQ t2, acc0; ADCQ t3, acc1; ADCQ $0, acc2
 
 // The POLY1305_MUL makro is taken from the sum_amd64.s file in /x/crypto/poly1305
 #define POLY1305_MUL(h0, h1, h2, r0, r1, t0, t1, t2, t3) \
@@ -750,24 +720,30 @@ TEXT ·chacha20Poly1305Seal(SB), 0, $288-96
 
 sealSSEIntroLoop:
 	MOVO         C3, tmpStore
-	chachaQR(A0, B0, C0, D0, C3); chachaQR(A1, B1, C1, D1, C3); chachaQR(A2, B2, C2, D2, C3)
+	CHACHA20_QROUND(A0, B0, C0, D0, C3)
+	CHACHA20_QROUND(A1, B1, C1, D1, C3)
+	CHACHA20_QROUND(A2, B2, C2, D2, C3)
 	MOVO         tmpStore, C3
 	MOVO         C1, tmpStore
-	chachaQR(A3, B3, C3, D3, C1)
+	CHACHA20_QROUND(A3, B3, C3, D3, C1)
 	MOVO         tmpStore, C1
-	shiftB0Left; shiftB1Left; shiftB2Left; shiftB3Left
-	shiftC0Left; shiftC1Left; shiftC2Left; shiftC3Left
-	shiftD0Left; shiftD1Left; shiftD2Left; shiftD3Left
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B0, C0, D0)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B1, C1, D1)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B2, C2, D2)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B3, C3, D3)
 
 	MOVO          C3, tmpStore
-	chachaQR(A0, B0, C0, D0, C3); chachaQR(A1, B1, C1, D1, C3); chachaQR(A2, B2, C2, D2, C3)
+	CHACHA20_QROUND(A0, B0, C0, D0, C3)
+	CHACHA20_QROUND(A1, B1, C1, D1, C3)
+	CHACHA20_QROUND(A2, B2, C2, D2, C3)
 	MOVO          tmpStore, C3
 	MOVO          C1, tmpStore
-	chachaQR(A3, B3, C3, D3, C1)
+	CHACHA20_QROUND(A3, B3, C3, D3, C1)
 	MOVO          tmpStore, C1
-	shiftB0Right; shiftB1Right; shiftB2Right; shiftB3Right
-	shiftC0Right; shiftC1Right; shiftC2Right; shiftC3Right
-	shiftD0Right; shiftD1Right; shiftD2Right; shiftD3Right
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B0, C0, D0)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B1, C1, D1)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B2, C2, D2)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B3, C3, D3)
 	DECQ          itr2
 	JNE           sealSSEIntroLoop
 
@@ -782,16 +758,12 @@ sealSSEIntroLoop:
 	MOVO A0, rStore
 	MOVO B0, sStore
 
-	// Hash AAD
+	// Hash AD
 	MOVQ ad_len+80(FP), itr2
 	CALL polyHashADInternal(SB)
 
-	MOVOU (0*16)(inp), A0; MOVOU (1*16)(inp), B0; MOVOU (2*16)(inp), C0; MOVOU (3*16)(inp), D0
-	PXOR  A0, A1; PXOR B0, B1; PXOR C0, C1; PXOR D0, D1
-	MOVOU A1, (0*16)(oup); MOVOU B1, (1*16)(oup); MOVOU C1, (2*16)(oup); MOVOU D1, (3*16)(oup)
-	MOVOU (4*16)(inp), A0; MOVOU (5*16)(inp), B0; MOVOU (6*16)(inp), C0; MOVOU (7*16)(inp), D0
-	PXOR  A0, A2; PXOR B0, B2; PXOR C0, C2; PXOR D0, D2
-	MOVOU A2, (4*16)(oup); MOVOU B2, (5*16)(oup); MOVOU C2, (6*16)(oup); MOVOU D2, (7*16)(oup)
+	XOR(oup, inp, 0, A1, B1, C1, D1, A0)
+	XOR(oup, inp, 64, A2, B2, C2, D2, A0) 
 
 	MOVQ $128, itr1
 	SUBQ $128, inl
@@ -802,6 +774,7 @@ sealSSEIntroLoop:
 	CMPQ inl, $64
 	JBE  sealSSE128SealHash
 
+	//XOR(oup, inp, 0, A3, B3, C3, D3, A0)
 	MOVOU (0*16)(inp), A0; MOVOU (1*16)(inp), B0; MOVOU (2*16)(inp), C0; MOVOU (3*16)(inp), D0
 	PXOR  A0, A3; PXOR B0, B3; PXOR C0, C3; PXOR D0, D3
 	MOVOU A3, (8*16)(oup); MOVOU B3, (9*16)(oup); MOVOU C3, (10*16)(oup); MOVOU D3, (11*16)(oup)
@@ -831,32 +804,38 @@ sealSSEMainLoop:
 	MOVO D0, ctr0Store; MOVO D1, ctr1Store; MOVO D2, ctr2Store; MOVO D3, ctr3Store
 
 sealSSEInnerLoop:
-	MOVO          C3, tmpStore
-	chachaQR(A0, B0, C0, D0, C3); chachaQR(A1, B1, C1, D1, C3); chachaQR(A2, B2, C2, D2, C3)
-	MOVO          tmpStore, C3
-	MOVO          C1, tmpStore
-	chachaQR(A3, B3, C3, D3, C1)
-	MOVO          tmpStore, C1
+	MOVO         C3, tmpStore
+	CHACHA20_QROUND(A0, B0, C0, D0, C3)
+	CHACHA20_QROUND(A1, B1, C1, D1, C3)
+	CHACHA20_QROUND(A2, B2, C2, D2, C3)
+	MOVO         tmpStore, C3
+	MOVO         C1, tmpStore
+	CHACHA20_QROUND(A3, B3, C3, D3, C1)
+	MOVO         tmpStore, C1
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B0, C0, D0)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B1, C1, D1)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B2, C2, D2)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B3, C3, D3)
+
 	polyAdd(0(oup))
-	shiftB0Left;  shiftB1Left; shiftB2Left; shiftB3Left
-	shiftC0Left;  shiftC1Left; shiftC2Left; shiftC3Left
-	shiftD0Left;  shiftD1Left; shiftD2Left; shiftD3Left
-	polyMulStage1
-	polyMulStage2
-	LEAQ          (2*8)(oup), oup
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
+	LEAQ          16(oup), oup
+
 	MOVO          C3, tmpStore
-	chachaQR(A0, B0, C0, D0, C3); chachaQR(A1, B1, C1, D1, C3); chachaQR(A2, B2, C2, D2, C3)
+	CHACHA20_QROUND(A0, B0, C0, D0, C3)
+	CHACHA20_QROUND(A1, B1, C1, D1, C3)
+	CHACHA20_QROUND(A2, B2, C2, D2, C3)
 	MOVO          tmpStore, C3
 	MOVO          C1, tmpStore
-	polyMulStage3
-	chachaQR(A3, B3, C3, D3, C1)
+	CHACHA20_QROUND(A3, B3, C3, D3, C1)
 	MOVO          tmpStore, C1
-	polyMulReduceStage
-	shiftB0Right; shiftB1Right; shiftB2Right; shiftB3Right
-	shiftC0Right; shiftC1Right; shiftC2Right; shiftC3Right
-	shiftD0Right; shiftD1Right; shiftD2Right; shiftD3Right
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B0, C0, D0)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B1, C1, D1)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B2, C2, D2)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B3, C3, D3)
 	DECQ          itr2
 	JGE           sealSSEInnerLoop
+
 	polyAdd(0(oup))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ          (2*8)(oup), oup
@@ -871,22 +850,11 @@ sealSSEInnerLoop:
 	MOVO  D3, tmpStore
 
 	// Load - xor - store
-	MOVOU (0*16)(inp), D3; PXOR D3, A0
-	MOVOU (1*16)(inp), D3; PXOR D3, B0
-	MOVOU (2*16)(inp), D3; PXOR D3, C0
-	MOVOU (3*16)(inp), D3; PXOR D3, D0
-	MOVOU A0, (0*16)(oup)
-	MOVOU B0, (1*16)(oup)
-	MOVOU C0, (2*16)(oup)
-	MOVOU D0, (3*16)(oup)
+	XOR(oup, inp, 0, A0, B0, C0, D0, D3)
+	XOR(oup, inp, 64, A1, B1, C1, D1, D3)
+	XOR(oup, inp, 128, A2, B2, C2, D2, D3)
 	MOVO  tmpStore, D3
 
-	MOVOU (4*16)(inp), A0; MOVOU (5*16)(inp), B0; MOVOU (6*16)(inp), C0; MOVOU (7*16)(inp), D0
-	PXOR  A0, A1; PXOR B0, B1; PXOR C0, C1; PXOR D0, D1
-	MOVOU A1, (4*16)(oup); MOVOU B1, (5*16)(oup); MOVOU C1, (6*16)(oup); MOVOU D1, (7*16)(oup)
-	MOVOU (8*16)(inp), A0; MOVOU (9*16)(inp), B0; MOVOU (10*16)(inp), C0; MOVOU (11*16)(inp), D0
-	PXOR  A0, A2; PXOR B0, B2; PXOR C0, C2; PXOR D0, D2
-	MOVOU A2, (8*16)(oup); MOVOU B2, (9*16)(oup); MOVOU C2, (10*16)(oup); MOVOU D2, (11*16)(oup)
 	ADDQ  $192, inp
 	MOVQ  $192, itr1
 	SUBQ  $192, inl
@@ -896,6 +864,7 @@ sealSSEInnerLoop:
 	MOVO  D3, D1
 	CMPQ  inl, $64
 	JBE   sealSSE128SealHash
+
 	MOVOU (0*16)(inp), A0; MOVOU (1*16)(inp), B0; MOVOU (2*16)(inp), C0; MOVOU (3*16)(inp), D0
 	PXOR  A0, A3; PXOR B0, B3; PXOR C0, C3; PXOR D0, D3
 	MOVOU A3, (12*16)(oup); MOVOU B3, (13*16)(oup); MOVOU C3, (14*16)(oup); MOVOU D3, (15*16)(oup)
@@ -909,9 +878,11 @@ sealSSEInnerLoop:
 	MOVQ  inl, itr1
 	TESTQ inl, inl
 	JE    sealSSE128SealHash
+
 	MOVQ  $6, itr1
 	CMPQ  inl, $64
 	JBE   sealSSETail64
+
 	CMPQ  inl, $128
 	JBE   sealSSETail128
 	JMP   sealSSETail192
@@ -934,10 +905,10 @@ sealSSETail64LoopA:
 	LEAQ 16(oup), oup
 
 sealSSETail64LoopB:
-	chachaQR(A1, B1, C1, D1, T1)
-	shiftB1Left;  shiftC1Left; shiftD1Left
-	chachaQR(A1, B1, C1, D1, T1)
-	shiftB1Right; shiftC1Right; shiftD1Right
+	CHACHA20_QROUND(A1, B1, C1, D1, T1)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B1, C1, D1)
+	CHACHA20_QROUND(A1, B1, C1, D1, T1)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B1, C1, D1)
 	polyAdd(0(oup))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ          16(oup), oup
@@ -968,15 +939,17 @@ sealSSETail128LoopA:
 	LEAQ 16(oup), oup
 
 sealSSETail128LoopB:
-	chachaQR(A0, B0, C0, D0, T0); chachaQR(A1, B1, C1, D1, T0)
-	shiftB0Left;  shiftC0Left; shiftD0Left
-	shiftB1Left;  shiftC1Left; shiftD1Left
+	CHACHA20_QROUND(A0, B0, C0, D0, T0)
+	CHACHA20_QROUND(A1, B1, C1, D1, T0)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B0, C0, D0)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B1, C1, D1)
 	polyAdd(0(oup))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ          16(oup), oup
-	chachaQR(A0, B0, C0, D0, T0); chachaQR(A1, B1, C1, D1, T0)
-	shiftB0Right; shiftC0Right; shiftD0Right
-	shiftB1Right; shiftC1Right; shiftD1Right
+	CHACHA20_QROUND(A0, B0, C0, D0, T0)
+	CHACHA20_QROUND(A1, B1, C1, D1, T0)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B0, C0, D0)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B1, C1, D1)
 
 	DECQ itr1
 	JG   sealSSETail128LoopA
@@ -989,9 +962,7 @@ sealSSETail128LoopB:
 	PADDL state2Store, C0; PADDL state2Store, C1
 	PADDL ctr0Store, D0; PADDL ctr1Store, D1
 
-	MOVOU (0*16)(inp), T0; MOVOU (1*16)(inp), T1; MOVOU (2*16)(inp), T2; MOVOU (3*16)(inp), T3
-	PXOR  T0, A0; PXOR T1, B0; PXOR T2, C0; PXOR T3, D0
-	MOVOU A0, (0*16)(oup); MOVOU B0, (1*16)(oup); MOVOU C0, (2*16)(oup); MOVOU D0, (3*16)(oup)
+	XOR(oup, inp, 0, A0, B0, C0, D0, T0)
 
 	MOVQ $64, itr1
 	LEAQ 64(inp), inp
@@ -1014,19 +985,23 @@ sealSSETail192LoopA:
 	LEAQ 16(oup), oup
 
 sealSSETail192LoopB:
-	chachaQR(A0, B0, C0, D0, T0); chachaQR(A1, B1, C1, D1, T0); chachaQR(A2, B2, C2, D2, T0)
-	shiftB0Left; shiftC0Left; shiftD0Left
-	shiftB1Left; shiftC1Left; shiftD1Left
-	shiftB2Left; shiftC2Left; shiftD2Left
+	CHACHA20_QROUND(A0, B0, C0, D0, T0)
+	CHACHA20_QROUND(A1, B1, C1, D1, T0)
+	CHACHA20_QROUND(A2, B2, C2, D2, T0)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B0, C0, D0)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B1, C1, D1)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B2, C2, D2)
 
 	polyAdd(0(oup))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ 16(oup), oup
 
-	chachaQR(A0, B0, C0, D0, T0); chachaQR(A1, B1, C1, D1, T0); chachaQR(A2, B2, C2, D2, T0)
-	shiftB0Right; shiftC0Right; shiftD0Right
-	shiftB1Right; shiftC1Right; shiftD1Right
-	shiftB2Right; shiftC2Right; shiftD2Right
+	CHACHA20_QROUND(A0, B0, C0, D0, T0)
+	CHACHA20_QROUND(A1, B1, C1, D1, T0)
+	CHACHA20_QROUND(A2, B2, C2, D2, T0)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B0, C0, D0)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B1, C1, D1)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B2, C2, D2)
 
 	DECQ itr1
 	JG   sealSSETail192LoopA
@@ -1039,13 +1014,9 @@ sealSSETail192LoopB:
 	PADDL state2Store, C0; PADDL state2Store, C1; PADDL state2Store, C2
 	PADDL ctr0Store, D0; PADDL ctr1Store, D1; PADDL ctr2Store, D2
 
-	MOVOU (0*16)(inp), T0; MOVOU (1*16)(inp), T1; MOVOU (2*16)(inp), T2; MOVOU (3*16)(inp), T3
-	PXOR  T0, A0; PXOR T1, B0; PXOR T2, C0; PXOR T3, D0
-	MOVOU A0, (0*16)(oup); MOVOU B0, (1*16)(oup); MOVOU C0, (2*16)(oup); MOVOU D0, (3*16)(oup)
-	MOVOU (4*16)(inp), T0; MOVOU (5*16)(inp), T1; MOVOU (6*16)(inp), T2; MOVOU (7*16)(inp), T3
-	PXOR  T0, A1; PXOR T1, B1; PXOR T2, C1; PXOR T3, D1
-	MOVOU A1, (4*16)(oup); MOVOU B1, (5*16)(oup); MOVOU C1, (6*16)(oup); MOVOU D1, (7*16)(oup)
-
+	XOR(oup, inp, 0, A0, B0, C0, D0, T0)
+	XOR(oup, inp, 64, A1, B1, C1, D1, T0)
+	
 	MOVO A2, A1
 	MOVO B2, B1
 	MOVO C2, C1
@@ -1067,14 +1038,18 @@ sealSSE128:
 	MOVQ  $10, itr2
 
 sealSSE128InnerCipherLoop:
-	chachaQR(A0, B0, C0, D0, T0); chachaQR(A1, B1, C1, D1, T0); chachaQR(A2, B2, C2, D2, T0)
-	shiftB0Left;  shiftB1Left; shiftB2Left
-	shiftC0Left;  shiftC1Left; shiftC2Left
-	shiftD0Left;  shiftD1Left; shiftD2Left
-	chachaQR(A0, B0, C0, D0, T0); chachaQR(A1, B1, C1, D1, T0); chachaQR(A2, B2, C2, D2, T0)
-	shiftB0Right; shiftB1Right; shiftB2Right
-	shiftC0Right; shiftC1Right; shiftC2Right
-	shiftD0Right; shiftD1Right; shiftD2Right
+	CHACHA20_QROUND(A0, B0, C0, D0, T0)
+	CHACHA20_QROUND(A1, B1, C1, D1, T0)
+	CHACHA20_QROUND(A2, B2, C2, D2, T0)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B0, C0, D0)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B1, C1, D1)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B2, C2, D2)
+	CHACHA20_QROUND(A0, B0, C0, D0, T0)
+	CHACHA20_QROUND(A1, B1, C1, D1, T0)
+	CHACHA20_QROUND(A2, B2, C2, D2, T0)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B0, C0, D0)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B1, C1, D1)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B2, C2, D2)
 	DECQ          itr2
 	JNE           sealSSE128InnerCipherLoop
 
@@ -1179,21 +1154,19 @@ sealSSEFinalize:
 	// Final reduce
 	MOVQ    acc0, t0
 	MOVQ    acc1, t1
-	MOVQ    acc2, t2
 	SUBQ    $-5, acc0
 	SBBQ    $-1, acc1
 	SBBQ    $3, acc2
 	CMOVQCS t0, acc0
 	CMOVQCS t1, acc1
-	CMOVQCS t2, acc2
 
 	// Add in the "s" part of the key
 	ADDQ 0+sStore, acc0
 	ADCQ 8+sStore, acc1
 
 	// Finally store the tag at the end of the message
-	MOVQ acc0, (0*8)(oup)
-	MOVQ acc1, (1*8)(oup)
+	MOVQ acc0, 0(oup)
+	MOVQ acc1, 8(oup)
 	RET
 
 // func haveSSSE3() bool
