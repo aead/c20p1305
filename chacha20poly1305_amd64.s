@@ -124,13 +124,15 @@
 	ADCQ  t3, h1;                  \
 	ADCQ  $0, h2
 
-TEXT polyHashADInternal(SB), NOSPLIT, $0
+// authAdditionalData authenticates the additional data.
+// itr2 := length of additional data
+TEXT authAdditionalData(SB), NOSPLIT, $0
 	XORQ acc0, acc0
 	XORQ acc1, acc1
 	XORQ acc2, acc2
 
-	CMPQ itr2, $13  // Special treatment for TLS
-	JNE  hash_additional_data_loop
+	CMPQ itr2, $13                 // Special treatment for TLS
+	JNE  auth_additional_data_loop
 
 	MOVQ 0(adp), acc0
 	MOVQ 5(adp), acc1
@@ -139,41 +141,41 @@ TEXT polyHashADInternal(SB), NOSPLIT, $0
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	RET
 
-hash_additional_data_loop:
+auth_additional_data_loop:
 	CMPQ itr2, $16
-	JB   hash_additional_data_finalize
+	JB   auth_additional_data_finalize
 
 	polyAdd(0(adp))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 	LEAQ 16(adp), adp
 	SUBQ $16, itr2
-	JMP  hash_additional_data_loop
+	JMP  auth_additional_data_loop
 
-hash_additional_data_finalize:
+auth_additional_data_finalize:
 	CMPQ itr2, $0
-	JE   hash_additional_data_done
+	JE   auth_additional_data_done
 
 	XORQ t0, t0
 	XORQ t1, t1
 	XORQ t2, t2
 	ADDQ itr2, adp
 
-hash_additional_data_flush:
+auth_additional_data_flush:
 	SHLQ $8, t1:t0
 	SHLQ $8, t0
 	MOVB -1(adp), t2
 	XORQ t2, t0
 	DECQ adp
 	DECQ itr2
-	JNE  hash_additional_data_flush
+	JNE  auth_additional_data_flush
 
 	ADDQ t0, acc0
 	ADCQ t1, acc1
 	ADCQ $1, acc2
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
-hash_additional_data_done:
+auth_additional_data_done:
 	RET
 
 // ----------------------------------------------------------------------------
@@ -189,23 +191,110 @@ TEXT ·chacha20Poly1305Open(SB), 0, $288-97
 	MOVQ src_len+56(FP), inl
 	MOVQ ad+72(FP), adp
 
-	// Special optimization, for very short buffers
-	CMPQ inl, $128
-	JBE  openSSE128 // About 16% faster
-
-	// For long buffers, prepare the poly key first
 	MOVOU ·chacha20Constants<>(SB), A0
 	MOVOU (1*16)(keyp), B0
 	MOVOU (2*16)(keyp), C0
 	MOVOU (3*16)(keyp), D0
-	MOVO  D0, T1
 
+	CMPQ inl, $128
+	JA  openSSELargeBuffers
+
+// ----------------------------------------------------------------------------
+// start of special version for short buffers
+
+// For up to 128 bytes of ciphertext and 64 bytes for the poly key, we require to process three blocks
+// Special optimization for buffers smaller than 129 bytes
+// Special optimization, for very short buffers - About 16% faster
+	MOVO  A0, A1
+	MOVO  B0, B1
+	MOVO  C0, C1
+	MOVO  D0, D1
+	PADDL ·sseIncMask<>(SB), D1
+	MOVO  A1, A2
+	MOVO  B1, B2
+	MOVO  C1, C2
+	MOVO  D1, D2
+	PADDL ·sseIncMask<>(SB), D2
+	MOVO  B0, T1
+	MOVO  C0, T2
+	MOVO  D1, T3
+
+	MOVQ  $10, itr2
+openSSE128InnerCipherLoop:
+	CHACHA20_QROUND(A0, B0, C0, D0, T0)
+	CHACHA20_QROUND(A1, B1, C1, D1, T0)
+	CHACHA20_QROUND(A2, B2, C2, D2, T0)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B0, C0, D0)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B1, C1, D1)
+	CHACHA20_SHUF(0x39, 0x4E, 0x93, B2, C2, D2)
+	CHACHA20_QROUND(A0, B0, C0, D0, T0)
+	CHACHA20_QROUND(A1, B1, C1, D1, T0)
+	CHACHA20_QROUND(A2, B2, C2, D2, T0)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B0, C0, D0)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B1, C1, D1)
+	CHACHA20_SHUF(0x93, 0x4E, 0x39, B2, C2, D2)
+	DECQ itr2
+	JNE  openSSE128InnerCipherLoop
+
+	// A0|B0 hold the Poly1305 32-byte key, C0,D0 can be discarded
+	PADDL ·chacha20Constants<>(SB), A0
+	PADDL ·chacha20Constants<>(SB), A1
+	PADDL ·chacha20Constants<>(SB), A2
+	PADDL T1, B0
+	PADDL T1, B1
+	PADDL T1, B2
+	PADDL T2, C1
+	PADDL T2, C2
+	PADDL T3, D1
+	PADDL ·sseIncMask<>(SB), T3
+	PADDL T3, D2
+
+	// Clamp and store the key
+	PAND  ·polyClampMask<>(SB), A0
+	MOVOU A0, rStore
+	MOVOU B0, sStore
+
+	// Hash
+	MOVQ ad_len+80(FP), itr2
+	CALL authAdditionalData(SB)
+
+openSSE128Open:
+	CMPQ inl, $16
+	JB   openSSETail16
+	SUBQ $16, inl
+
+	// Load for hashing
+	polyAdd(0(inp))
+	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
+
+	// Load for decryption
+	MOVOU (inp), T0 
+	PXOR T0, A1 
+	MOVOU A1, (oup)
+	LEAQ  16(inp), inp
+	LEAQ  16(oup), oup
+	
+	// Shift the stream "left"
+	MOVO B1, A1
+	MOVO C1, B1
+	MOVO D1, C1
+	MOVO A2, D1
+	MOVO B2, A2
+	MOVO C2, B2
+	MOVO D2, C2
+	JMP  openSSE128Open
+
+// end of special version for short buffers 
+// ----------------------------------------------------------------------------
+
+openSSELargeBuffers:
 	// Store state on stack for future use
 	MOVO B0, state1Store
 	MOVO C0, state2Store
 	MOVO D0, ctr3Store
-	MOVQ $10, itr2
+	//MOVO D0, T1
 
+	MOVQ $10, itr2
 openSSEPreparePolyKey:
 	CHACHA20_QROUND(A0, B0, C0, D0, T0)
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B0, C0, D0)
@@ -225,7 +314,7 @@ openSSEPreparePolyKey:
 
 	// Hash AD
 	MOVQ ad_len+80(FP), itr2
-	CALL polyHashADInternal(SB)
+	CALL authAdditionalData(SB)
 
 openSSEMainLoop:
 	CMPQ inl, $256
@@ -313,70 +402,6 @@ openSSEMainLoopDone:
 	CMPQ  inl, $192
 	JBE   openSSETail192
 	JMP   openSSETail256
-
-// ----------------------------------------------------------------------------
-// Special optimization for buffers smaller than 129 bytes
-openSSE128:
-	// For up to 128 bytes of ciphertext and 64 bytes for the poly key, we require to process three blocks
-	MOVOU ·chacha20Constants<>(SB), A0; MOVOU (1*16)(keyp), B0; MOVOU (2*16)(keyp), C0; MOVOU (3*16)(keyp), D0
-	MOVO  A0, A1; MOVO B0, B1; MOVO C0, C1; MOVO D0, D1; PADDL ·sseIncMask<>(SB), D1
-	MOVO  A1, A2; MOVO B1, B2; MOVO C1, C2; MOVO D1, D2; PADDL ·sseIncMask<>(SB), D2
-	MOVO  B0, T1; MOVO C0, T2; MOVO D1, T3
-	MOVQ  $10, itr2
-
-openSSE128InnerCipherLoop:
-	CHACHA20_QROUND(A0, B0, C0, D0, T0)
-	CHACHA20_QROUND(A1, B1, C1, D1, T0)
-	CHACHA20_QROUND(A2, B2, C2, D2, T0)
-	CHACHA20_SHUF(0x39, 0x4E, 0x93, B0, C0, D0)
-	CHACHA20_SHUF(0x39, 0x4E, 0x93, B1, C1, D1)
-	CHACHA20_SHUF(0x39, 0x4E, 0x93, B2, C2, D2)
-	CHACHA20_QROUND(A0, B0, C0, D0, T0)
-	CHACHA20_QROUND(A1, B1, C1, D1, T0)
-	CHACHA20_QROUND(A2, B2, C2, D2, T0)
-	CHACHA20_SHUF(0x93, 0x4E, 0x39, B0, C0, D0)
-	CHACHA20_SHUF(0x93, 0x4E, 0x39, B1, C1, D1)
-	CHACHA20_SHUF(0x93, 0x4E, 0x39, B2, C2, D2)
-	DECQ itr2
-	JNE  openSSE128InnerCipherLoop
-
-	// A0|B0 hold the Poly1305 32-byte key, C0,D0 can be discarded
-	PADDL ·chacha20Constants<>(SB), A0; PADDL ·chacha20Constants<>(SB), A1; PADDL ·chacha20Constants<>(SB), A2
-	PADDL T1, B0; PADDL T1, B1; PADDL T1, B2
-	PADDL T2, C1; PADDL T2, C2
-	PADDL T3, D1; PADDL ·sseIncMask<>(SB), T3; PADDL T3, D2
-
-	// Clamp and store the key
-	PAND  ·polyClampMask<>(SB), A0
-	MOVOU A0, rStore; MOVOU B0, sStore
-
-	// Hash
-	MOVQ ad_len+80(FP), itr2
-	CALL polyHashADInternal(SB)
-
-openSSE128Open:
-	CMPQ inl, $16
-	JB   openSSETail16
-	SUBQ $16, inl
-
-	// Load for hashing
-	polyAdd(0(inp))
-
-	// Load for decryption
-	MOVOU (inp), T0; PXOR T0, A1; MOVOU A1, (oup)
-	LEAQ  (1*16)(inp), inp
-	LEAQ  (1*16)(oup), oup
-	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
-
-	// Shift the stream "left"
-	MOVO B1, A1
-	MOVO C1, B1
-	MOVO D1, C1
-	MOVO A2, D1
-	MOVO B2, A2
-	MOVO C2, B2
-	MOVO D2, C2
-	JMP  openSSE128Open
 
 openSSETail16:
 	TESTQ inl, inl
@@ -757,7 +782,7 @@ sealSSEIntroLoop:
 
 	// Hash AD
 	MOVQ ad_len+80(FP), itr2
-	CALL polyHashADInternal(SB)
+	CALL authAdditionalData(SB)
 
 	XOR(oup, inp, 0, A1, B1, C1, D1, A0)
 	XOR(oup, inp, 64, A2, B2, C2, D2, A0)
@@ -1061,7 +1086,7 @@ sealSSE128InnerCipherLoop:
 
 	// Hash
 	MOVQ ad_len+80(FP), itr2
-	CALL polyHashADInternal(SB)
+	CALL authAdditionalData(SB)
 	XORQ itr1, itr1
 
 sealSSE128SealHash:
