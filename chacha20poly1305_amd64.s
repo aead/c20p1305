@@ -126,7 +126,7 @@
 
 // authAdditionalData authenticates the additional data.
 // itr2 := length of additional data
-TEXT authAdditionalData(SB), NOSPLIT, $0
+TEXT authAdditionalData<>(SB), NOSPLIT, $0
 	XORQ acc0, acc0
 	XORQ acc1, acc1
 	XORQ acc2, acc2
@@ -256,7 +256,7 @@ openSSE128InnerCipherLoop:
 
 	// Hash
 	MOVQ ad_len+80(FP), itr2
-	CALL authAdditionalData(SB)
+	CALL authAdditionalData<>(SB)
 
 openSSE128Open:
 	CMPQ inl, $16
@@ -314,7 +314,7 @@ openSSEPreparePolyKey:
 
 	// Hash AD
 	MOVQ ad_len+80(FP), itr2
-	CALL authAdditionalData(SB)
+	CALL authAdditionalData<>(SB)
 
 openSSEMainLoop:
 	CMPQ inl, $256
@@ -782,7 +782,7 @@ sealSSEIntroLoop:
 
 	// Hash AD
 	MOVQ ad_len+80(FP), itr2
-	CALL authAdditionalData(SB)
+	CALL authAdditionalData<>(SB)
 
 	XOR(oup, inp, 0, A1, B1, C1, D1, A0)
 	XOR(oup, inp, 64, A2, B2, C2, D2, A0)
@@ -1086,7 +1086,7 @@ sealSSE128InnerCipherLoop:
 
 	// Hash
 	MOVQ ad_len+80(FP), itr2
-	CALL authAdditionalData(SB)
+	CALL authAdditionalData<>(SB)
 	XORQ itr1, itr1
 
 sealSSE128SealHash:
