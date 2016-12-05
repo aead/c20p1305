@@ -181,15 +181,16 @@ auth_additional_data_done:
 // ----------------------------------------------------------------------------
 // func chacha20Poly1305Open(dst, key, src, ad []byte) bool
 TEXT ·chacha20Poly1305Open(SB), 0, $288-97
-	// For aligned stack access
-	MOVQ SP, BP
-	ADDQ $32, BP
-	ANDQ $-32, BP
 	MOVQ dst+0(FP), oup
 	MOVQ key+24(FP), keyp
 	MOVQ src+48(FP), inp
 	MOVQ src_len+56(FP), inl
 	MOVQ ad+72(FP), adp
+
+	// For aligned stack access
+	MOVQ SP, BP
+	ADDQ $32, BP
+	ANDQ $-32, BP
 
 	MOVOU ·chacha20Constants<>(SB), A0
 	MOVOU (1*16)(keyp), B0
@@ -197,14 +198,10 @@ TEXT ·chacha20Poly1305Open(SB), 0, $288-97
 	MOVOU (3*16)(keyp), D0
 
 	CMPQ inl, $128
-	JA  openSSELargeBuffers
+	JA   open_sse_start // skip special optimization for short buffers
 
-// ----------------------------------------------------------------------------
-// start of special version for short buffers
-
-// For up to 128 bytes of ciphertext and 64 bytes for the poly key, we require to process three blocks
-// Special optimization for buffers smaller than 129 bytes
-// Special optimization, for very short buffers - About 16% faster
+	// Special optimization for buffers smaller than 129 bytes - about 16% faster
+	// For up to 128 bytes of ciphertext and 64 bytes for the poly key, we require to process three blocks
 	MOVO  A0, A1
 	MOVO  B0, B1
 	MOVO  C0, C1
@@ -219,8 +216,9 @@ TEXT ·chacha20Poly1305Open(SB), 0, $288-97
 	MOVO  C0, T2
 	MOVO  D1, T3
 
-	MOVQ  $10, itr2
-openSSE128InnerCipherLoop:
+	MOVQ $10, itr2
+
+open_sse_special_keystream_loop:
 	CHACHA20_QROUND(A0, B0, C0, D0, T0)
 	CHACHA20_QROUND(A1, B1, C1, D1, T0)
 	CHACHA20_QROUND(A2, B2, C2, D2, T0)
@@ -234,9 +232,9 @@ openSSE128InnerCipherLoop:
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B1, C1, D1)
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B2, C2, D2)
 	DECQ itr2
-	JNE  openSSE128InnerCipherLoop
+	JNE  open_sse_special_keystream_loop
 
-	// A0|B0 hold the Poly1305 32-byte key, C0,D0 can be discarded
+	// A0|B0 hold the poly1305 32-byte key - C0 and D0 can be discarded
 	PADDL ·chacha20Constants<>(SB), A0
 	PADDL ·chacha20Constants<>(SB), A1
 	PADDL ·chacha20Constants<>(SB), A2
@@ -246,8 +244,8 @@ openSSE128InnerCipherLoop:
 	PADDL T2, C1
 	PADDL T2, C2
 	PADDL T3, D1
-	PADDL ·sseIncMask<>(SB), T3
 	PADDL T3, D2
+	PADDL ·sseIncMask<>(SB), D2
 
 	// Clamp and store the key
 	PAND  ·polyClampMask<>(SB), A0
@@ -258,22 +256,21 @@ openSSE128InnerCipherLoop:
 	MOVQ ad_len+80(FP), itr2
 	CALL authAdditionalData<>(SB)
 
-openSSE128Open:
+open_sse_special_decrypt_verify_loop:
 	CMPQ inl, $16
-	JB   openSSETail16
+	JB   open_sse_16_bytes_remaining
 	SUBQ $16, inl
 
-	// Load for hashing
 	polyAdd(0(inp))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
-	// Load for decryption
-	MOVOU (inp), T0 
-	PXOR T0, A1 
+	MOVOU (inp), T0
+	PXOR  T0, A1
 	MOVOU A1, (oup)
-	LEAQ  16(inp), inp
-	LEAQ  16(oup), oup
-	
+
+	LEAQ 16(inp), inp
+	LEAQ 16(oup), oup
+
 	// Shift the stream "left"
 	MOVO B1, A1
 	MOVO C1, B1
@@ -282,26 +279,28 @@ openSSE128Open:
 	MOVO B2, A2
 	MOVO C2, B2
 	MOVO D2, C2
-	JMP  openSSE128Open
+	JMP  open_sse_special_decrypt_verify_loop
 
-// end of special version for short buffers 
-// ----------------------------------------------------------------------------
+// --------------------------------------------------
+// end of special version for short buffers
 
-openSSELargeBuffers:
+open_sse_start:
 	// Store state on stack for future use
 	MOVO B0, state1Store
 	MOVO C0, state2Store
 	MOVO D0, ctr3Store
-	//MOVO D0, T1
+
+	// MOVO D0, T1	// maybe unnecessary
 
 	MOVQ $10, itr2
-openSSEPreparePolyKey:
+
+open_sse_create_poly1305_key_loop:
 	CHACHA20_QROUND(A0, B0, C0, D0, T0)
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B0, C0, D0)
 	CHACHA20_QROUND(A0, B0, C0, D0, T0)
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B0, C0, D0)
 	DECQ itr2
-	JNE  openSSEPreparePolyKey
+	JNE  open_sse_create_poly1305_key_loop
 
 	// A0|B0 hold the Poly1305 32-byte key, C0,D0 can be discarded
 	PADDL ·chacha20Constants<>(SB), A0
@@ -316,24 +315,43 @@ openSSEPreparePolyKey:
 	MOVQ ad_len+80(FP), itr2
 	CALL authAdditionalData<>(SB)
 
-openSSEMainLoop:
+open_sse_main_loop:
 	CMPQ inl, $256
-	JB   openSSEMainLoopDone
+	JB   open_sse_main_loop_done
 
 	// Load state, increment counter blocks
-	MOVO ·chacha20Constants<>(SB), A0; MOVO state1Store, B0; MOVO state2Store, C0; MOVO ctr3Store, D0; PADDL ·sseIncMask<>(SB), D0
-	MOVO A0, A1; MOVO B0, B1; MOVO C0, C1; MOVO D0, D1; PADDL ·sseIncMask<>(SB), D1
-	MOVO A1, A2; MOVO B1, B2; MOVO C1, C2; MOVO D1, D2; PADDL ·sseIncMask<>(SB), D2
-	MOVO A2, A3; MOVO B2, B3; MOVO C2, C3; MOVO D2, D3; PADDL ·sseIncMask<>(SB), D3
+	MOVO  ·chacha20Constants<>(SB), A0
+	MOVO  state1Store, B0
+	MOVO  state2Store, C0
+	MOVO  ctr3Store, D0
+	PADDL ·sseIncMask<>(SB), D0
+	MOVO  A0, A1
+	MOVO  B0, B1
+	MOVO  C0, C1
+	MOVO  D0, D1
+	PADDL ·sseIncMask<>(SB), D1
+	MOVO  A1, A2
+	MOVO  B1, B2
+	MOVO  C1, C2
+	MOVO  D1, D2
+	PADDL ·sseIncMask<>(SB), D2
+	MOVO  A2, A3
+	MOVO  B2, B3
+	MOVO  C2, C3
+	MOVO  D2, D3
+	PADDL ·sseIncMask<>(SB), D3
 
 	// Store counters
-	MOVO D0, ctr0Store; MOVO D1, ctr1Store; MOVO D2, ctr2Store; MOVO D3, ctr3Store
+	MOVO D0, ctr0Store; 
+	MOVO D1, ctr1Store; 
+	MOVO D2, ctr2Store; 
+	MOVO D3, ctr3Store
 
-	// There are 10 ChaCha20 iterations of 2QR each, so for 6 iterations we hash 2 blocks, and for the remaining 4 only 1 block - for a total of 16
+	// There are 10 ChaCha20 iterations of 2QR each, so for 6 iterations we hash 2 blocks
+	// and for the remaining 4 only 1 block - for a total of 16
 	MOVQ $4, itr1
 	MOVQ inp, itr2
-
-openSSEInternalLoop:
+open_sse_decrypt_verify_256_loop:
 	MOVO C3, tmpStore
 	CHACHA20_QROUND(A0, B0, C0, D0, C3)
 	CHACHA20_QROUND(A1, B1, C1, D1, C3)
@@ -363,21 +381,34 @@ openSSEInternalLoop:
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B1, C1, D1)
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B2, C2, D2)
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B3, C3, D3)
+	
 	DECQ itr1
-	JGE  openSSEInternalLoop
+	JGE  open_sse_decrypt_verify_256_loop
 
 	polyAdd(0(itr2))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ 16(itr2), itr2
 
 	CMPQ itr1, $-6
-	JG   openSSEInternalLoop
+	JG   open_sse_decrypt_verify_256_loop
 
 	// Add in the state
-	PADDD ·chacha20Constants<>(SB), A0; PADDD ·chacha20Constants<>(SB), A1; PADDD ·chacha20Constants<>(SB), A2; PADDD ·chacha20Constants<>(SB), A3
-	PADDD state1Store, B0; PADDD state1Store, B1; PADDD state1Store, B2; PADDD state1Store, B3
-	PADDD state2Store, C0; PADDD state2Store, C1; PADDD state2Store, C2; PADDD state2Store, C3
-	PADDD ctr0Store, D0; PADDD ctr1Store, D1; PADDD ctr2Store, D2; PADDD ctr3Store, D3
+	PADDD ·chacha20Constants<>(SB), A0 
+	PADDD ·chacha20Constants<>(SB), A1 
+	PADDD ·chacha20Constants<>(SB), A2
+	PADDD ·chacha20Constants<>(SB), A3
+	PADDD state1Store, B0 
+	PADDD state1Store, B1
+	PADDD state1Store, B2
+	PADDD state1Store, B3
+	PADDD state2Store, C0
+	PADDD state2Store, C1
+	PADDD state2Store, C2
+	PADDD state2Store, C3
+	PADDD ctr0Store, D0
+	PADDD ctr1Store, D1
+	PADDD ctr2Store, D2
+	PADDD ctr3Store, D3
 
 	// Load - xor - store
 	MOVO D3, tmpStore
@@ -389,67 +420,73 @@ openSSEInternalLoop:
 	LEAQ 256(inp), inp
 	LEAQ 256(oup), oup
 	SUBQ $256, inl
-	JMP  openSSEMainLoop
+	JMP  open_sse_main_loop
 
-openSSEMainLoopDone:
+open_sse_main_loop_done:
 	// Handle the various tail sizes efficiently
 	TESTQ inl, inl
-	JE    openSSEFinalize
+	JE    open_sse_finalize
 	CMPQ  inl, $64
-	JBE   openSSETail64
+	JBE   open_sse_64_bytes_remaining
 	CMPQ  inl, $128
-	JBE   openSSETail128
+	JBE   open_sse_128_bytes_remaining
 	CMPQ  inl, $192
-	JBE   openSSETail192
-	JMP   openSSETail256
+	JBE   open_sse_192_bytes_remaining
+	JMP   open_sse_256_bytes_remaining
 
-openSSETail16:
+open_sse_16_bytes_remaining:
 	TESTQ inl, inl
-	JE    openSSEFinalize
+	JE    open_sse_finalize
 
-	// We can safely load the CT from the end, because it is padded with the MAC
+	// We can safely load the ciphertext from the end, because it is padded with the MAC
 	MOVQ  inl, itr2
 	SHLQ  $4, itr2
 	LEAQ  ·andMask<>(SB), t0
 	MOVOU (inp), T0
 	ADDQ  inl, inp
 	PAND  -16(t0)(itr2*1), T0
-	MOVO  T0, 0+tmpStore
+	MOVO  T0, tmpStore
 	MOVQ  T0, t0
 	MOVQ  8+tmpStore, t1
 	PXOR  A1, T0
 
 	// We can only store one byte at a time, since plaintext can be shorter than 16 bytes
-openSSETail16Store:
+open_sse_16_bytes_remaining_store_plaintext:
 	MOVQ   T0, t3
 	MOVB   t3, (oup)
 	PSRLDQ $1, T0
 	INCQ   oup
 	DECQ   inl
-	JNE    openSSETail16Store
+	JNE    open_sse_16_bytes_remaining_store_plaintext
+
 	ADDQ   t0, acc0
 	ADCQ   t1, acc1
 	ADCQ   $1, acc2
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
-	JMP    openSSEFinalize
+	JMP    open_sse_finalize
 
 // ----------------------------------------------------------------------------
 // Special optimization for the last 64 bytes of ciphertext
-openSSETail64:
+open_sse_64_bytes_remaining:
 	// Need to decrypt up to 64 bytes - prepare single block
-	MOVO ·chacha20Constants<>(SB), A0; MOVO state1Store, B0; MOVO state2Store, C0; MOVO ctr3Store, D0; PADDL ·sseIncMask<>(SB), D0; MOVO D0, ctr0Store
+	MOVO ·chacha20Constants<>(SB), A0
+	MOVO state1Store, B0
+	MOVO state2Store, C0
+	MOVO ctr3Store, D0
+	PADDL ·sseIncMask<>(SB), D0
+	MOVO D0, ctr0Store
 	XORQ itr2, itr2
 	MOVQ inl, itr1
 	CMPQ itr1, $16
-	JB   openSSETail64LoopB
+	JB   open_sse_64_bytes_remaining_decrypt
 
-openSSETail64LoopA:
+open_sse_64_bytes_remaining_decrypt_verify:
 	// Perform ChaCha rounds, while hashing the remaining input
 	polyAdd(0(inp)(itr2*1))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	SUBQ $16, itr1
 
-openSSETail64LoopB:
+open_sse_64_bytes_remaining_decrypt:
 	ADDQ $16, itr2
 	CHACHA20_QROUND(A0, B0, C0, D0, T0)
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B0, C0, D0)
@@ -457,47 +494,63 @@ openSSETail64LoopB:
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B0, C0, D0)
 
 	CMPQ itr1, $16
-	JAE  openSSETail64LoopA
+	JAE  open_sse_64_bytes_remaining_decrypt_verify
 
 	CMPQ itr2, $160
-	JNE  openSSETail64LoopB
+	JNE  open_sse_64_bytes_remaining_decrypt
 
-	PADDL ·chacha20Constants<>(SB), A0; PADDL state1Store, B0; PADDL state2Store, C0; PADDL ctr0Store, D0
+	PADDL ·chacha20Constants<>(SB), A0
+	PADDL state1Store, B0
+	PADDL state2Store, C0
+	PADDL ctr0Store, D0
 
-openSSETail64DecLoop:
+open_sse_64_bytes_remaining_store_plaintext:
 	CMPQ  inl, $16
-	JB    openSSETail64DecLoopDone
+	JB    open_sse_64_bytes_remaining_done
 	SUBQ  $16, inl
+
 	MOVOU (inp), T0
 	PXOR  T0, A0
 	MOVOU A0, (oup)
 	LEAQ  16(inp), inp
 	LEAQ  16(oup), oup
+	
+	// Shift the stream "left"
 	MOVO  B0, A0
 	MOVO  C0, B0
 	MOVO  D0, C0
-	JMP   openSSETail64DecLoop
+	JMP   open_sse_64_bytes_remaining_store_plaintext
 
-openSSETail64DecLoopDone:
+open_sse_64_bytes_remaining_done:
 	MOVO A0, A1
-	JMP  openSSETail16
+	JMP  open_sse_16_bytes_remaining
 
 // ----------------------------------------------------------------------------
 // Special optimization for the last 128 bytes of ciphertext
-openSSETail128:
+open_sse_128_bytes_remaining:
 	// Need to decrypt up to 128 bytes - prepare two blocks
-	MOVO ·chacha20Constants<>(SB), A1; MOVO state1Store, B1; MOVO state2Store, C1; MOVO ctr3Store, D1; PADDL ·sseIncMask<>(SB), D1; MOVO D1, ctr0Store
-	MOVO A1, A0; MOVO B1, B0; MOVO C1, C0; MOVO D1, D0; PADDL ·sseIncMask<>(SB), D0; MOVO D0, ctr1Store
+	MOVO ·chacha20Constants<>(SB), A1
+	MOVO state1Store, B1
+	MOVO state2Store, C1
+	MOVO ctr3Store, D1
+	PADDL ·sseIncMask<>(SB), D1
+	MOVO D1, ctr0Store
+	MOVO A1, A0
+	MOVO B1, B0
+	MOVO C1, C0
+	MOVO D1, D0
+	PADDL ·sseIncMask<>(SB), D0
+	MOVO D0, ctr1Store
 	XORQ itr2, itr2
 	MOVQ inl, itr1
 	ANDQ $-16, itr1
 
-openSSETail128LoopA:
+open_sse_128_bytes_remaining_decrypt_verify:
 	// Perform ChaCha rounds, while hashing the remaining input
 	polyAdd(0(inp)(itr2*1))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
-openSSETail128LoopB:
+open_sse_128_bytes_remaining_decrypt:
 	ADDQ $16, itr2
 	CHACHA20_QROUND(A0, B0, C0, D0, T0)
 	CHACHA20_QROUND(A1, B1, C1, D1, T0)
@@ -509,30 +562,49 @@ openSSETail128LoopB:
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B1, C1, D1)
 
 	CMPQ itr2, itr1
-	JB   openSSETail128LoopA
+	JB   open_sse_128_bytes_remaining_decrypt_verify
 
 	CMPQ itr2, $160
-	JNE  openSSETail128LoopB
+	JNE  open_sse_128_bytes_remaining_decrypt
 
-	PADDL ·chacha20Constants<>(SB), A0; PADDL ·chacha20Constants<>(SB), A1
-	PADDL state1Store, B0; PADDL state1Store, B1
-	PADDL state2Store, C0; PADDL state2Store, C1
-	PADDL ctr1Store, D0; PADDL ctr0Store, D1
+	PADDL ·chacha20Constants<>(SB), A0
+	PADDL ·chacha20Constants<>(SB), A1
+	PADDL state1Store, B0
+	PADDL state1Store, B1
+	PADDL state2Store, C0
+	PADDL state2Store, C1
+	PADDL ctr1Store, D0
+	PADDL ctr0Store, D1
 
 	XOR(oup, inp, 0, A1, B1, C1, D1, T0)
 
 	SUBQ $64, inl
 	LEAQ 64(inp), inp
 	LEAQ 64(oup), oup
-	JMP  openSSETail64DecLoop
+	JMP  open_sse_64_bytes_remaining_store_plaintext
 
 // ----------------------------------------------------------------------------
 // Special optimization for the last 192 bytes of ciphertext
-openSSETail192:
+open_sse_192_bytes_remaining:
 	// Need to decrypt up to 192 bytes - prepare three blocks
-	MOVO ·chacha20Constants<>(SB), A2; MOVO state1Store, B2; MOVO state2Store, C2; MOVO ctr3Store, D2; PADDL ·sseIncMask<>(SB), D2; MOVO D2, ctr0Store
-	MOVO A2, A1; MOVO B2, B1; MOVO C2, C1; MOVO D2, D1; PADDL ·sseIncMask<>(SB), D1; MOVO D1, ctr1Store
-	MOVO A1, A0; MOVO B1, B0; MOVO C1, C0; MOVO D1, D0; PADDL ·sseIncMask<>(SB), D0; MOVO D0, ctr2Store
+	MOVO ·chacha20Constants<>(SB), A2
+	MOVO state1Store, B2
+	MOVO state2Store, C2
+	MOVO ctr3Store, D2
+	PADDL ·sseIncMask<>(SB), D2
+	MOVO D2, ctr0Store
+	MOVO A2, A1
+	MOVO B2, B1
+	MOVO C2, C1
+	MOVO D2, D1
+	PADDL ·sseIncMask<>(SB), D1
+	MOVO D1, ctr1Store
+	MOVO A1, A0
+	MOVO B1, B0
+	MOVO C1, C0
+	MOVO D1, D0
+	PADDL ·sseIncMask<>(SB), D0
+	MOVO D0, ctr2Store
 
 	MOVQ    inl, itr1
 	MOVQ    $160, itr2
@@ -541,12 +613,12 @@ openSSETail192:
 	ANDQ    $-16, itr1
 	XORQ    itr2, itr2
 
-openSSLTail192LoopA:
+open_sse_192_bytes_remaining_decrypt_verify:
 	// Perform ChaCha rounds, while hashing the remaining input
 	polyAdd(0(inp)(itr2*1))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
-openSSLTail192LoopB:
+open_sse_192_bytes_remaining_decrypt:
 	ADDQ $16, itr2
 	CHACHA20_QROUND(A0, B0, C0, D0, T0)
 	CHACHA20_QROUND(A1, B1, C1, D1, T0)
@@ -562,28 +634,36 @@ openSSLTail192LoopB:
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B2, C2, D2)
 
 	CMPQ itr2, itr1
-	JB   openSSLTail192LoopA
+	JB   open_sse_192_bytes_remaining_decrypt_verify
 
 	CMPQ itr2, $160
-	JNE  openSSLTail192LoopB
+	JNE  open_sse_192_bytes_remaining_decrypt
 
 	CMPQ inl, $176
-	JB   openSSLTail192Store
+	JB   open_sse_192_bytes_remaining_store_plaintext
 
 	polyAdd(160(inp))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 	CMPQ inl, $192
-	JB   openSSLTail192Store
+	JB   open_sse_192_bytes_remaining_store_plaintext
 
 	polyAdd(176(inp))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
-openSSLTail192Store:
-	PADDL ·chacha20Constants<>(SB), A0; PADDL ·chacha20Constants<>(SB), A1; PADDL ·chacha20Constants<>(SB), A2
-	PADDL state1Store, B0; PADDL state1Store, B1; PADDL state1Store, B2
-	PADDL state2Store, C0; PADDL state2Store, C1; PADDL state2Store, C2
-	PADDL ctr2Store, D0; PADDL ctr1Store, D1; PADDL ctr0Store, D2
+open_sse_192_bytes_remaining_store_plaintext:
+	PADDL ·chacha20Constants<>(SB), A0
+	PADDL ·chacha20Constants<>(SB), A1
+	PADDL ·chacha20Constants<>(SB), A2
+	PADDL state1Store, B0
+	PADDL state1Store, B1
+	PADDL state1Store, B2
+	PADDL state2Store, C0
+	PADDL state2Store, C1
+	PADDL state2Store, C2
+	PADDL ctr2Store, D0
+	PADDL ctr1Store, D1
+	PADDL ctr0Store, D2
 
 	XOR(oup, inp, 0, A2, B2, C2, D2, T0)
 	XOR(oup, inp, 64, A1, B1, C1, D1, T0)
@@ -591,23 +671,39 @@ openSSLTail192Store:
 	SUBQ $128, inl
 	LEAQ 128(inp), inp
 	LEAQ 128(oup), oup
-	JMP  openSSETail64DecLoop
+	JMP  open_sse_64_bytes_remaining_store_plaintext
 
 // ----------------------------------------------------------------------------
 // Special optimization for the last 256 bytes of ciphertext
-openSSETail256:
+open_sse_256_bytes_remaining:
 	// Need to decrypt up to 256 bytes - prepare four blocks
-	MOVO ·chacha20Constants<>(SB), A0; MOVO state1Store, B0; MOVO state2Store, C0; MOVO ctr3Store, D0; PADDL ·sseIncMask<>(SB), D0
-	MOVO A0, A1; MOVO B0, B1; MOVO C0, C1; MOVO D0, D1; PADDL ·sseIncMask<>(SB), D1
-	MOVO A1, A2; MOVO B1, B2; MOVO C1, C2; MOVO D1, D2; PADDL ·sseIncMask<>(SB), D2
-	MOVO A2, A3; MOVO B2, B3; MOVO C2, C3; MOVO D2, D3; PADDL ·sseIncMask<>(SB), D3
+	MOVO ·chacha20Constants<>(SB), A0
+	MOVO state1Store, B0
+	MOVO state2Store, C0
+	MOVO ctr3Store, D0
+	PADDL ·sseIncMask<>(SB), D0
+	MOVO A0, A1
+	MOVO B0, B1
+	MOVO C0, C1
+	MOVO D0, D1
+	PADDL ·sseIncMask<>(SB), D1
+	MOVO A1, A2
+	MOVO B1, B2
+	MOVO C1, C2
+	MOVO D1, D2
+	PADDL ·sseIncMask<>(SB), D2
+	MOVO A2, A3
+	MOVO B2, B3
+	MOVO C2, C3
+	MOVO D2, D3
+	PADDL ·sseIncMask<>(SB), D3
 
 	// Store counters
 	MOVO D0, ctr0Store; MOVO D1, ctr1Store; MOVO D2, ctr2Store; MOVO D3, ctr3Store
 	XORQ itr2, itr2
 
-openSSETail256Loop:
-	// This loop inteleaves 8 ChaCha quarter rounds with 1 poly multiplication
+// This loop inteleaves 8 ChaCha quarter rounds with 1 poly multiplication
+open_sse_256_bytes_remaining_decrypt_verify:
 	MOVO C3, tmpStore
 	CHACHA20_QROUND(A0, B0, C0, D0, C3)
 	CHACHA20_QROUND(A1, B1, C1, D1, C3)
@@ -639,22 +735,34 @@ openSSETail256Loop:
 
 	ADDQ $2*8, itr2
 	CMPQ itr2, $160
-	JB   openSSETail256Loop
+	JB   open_sse_256_bytes_remaining_decrypt_verify
 	MOVQ inl, itr1
 	ANDQ $-16, itr1
 
-openSSETail256HashLoop:
+open_sse_256_bytes_remaining_verify:
 	polyAdd(0(inp)(itr2*1))
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	ADDQ $2*8, itr2
 	CMPQ itr2, itr1
-	JB   openSSETail256HashLoop
+	JB   open_sse_256_bytes_remaining_verify
 
 	// Add in the state
-	PADDD ·chacha20Constants<>(SB), A0; PADDD ·chacha20Constants<>(SB), A1; PADDD ·chacha20Constants<>(SB), A2; PADDD ·chacha20Constants<>(SB), A3
-	PADDD state1Store, B0; PADDD state1Store, B1; PADDD state1Store, B2; PADDD state1Store, B3
-	PADDD state2Store, C0; PADDD state2Store, C1; PADDD state2Store, C2; PADDD state2Store, C3
-	PADDD ctr0Store, D0; PADDD ctr1Store, D1; PADDD ctr2Store, D2; PADDD ctr3Store, D3
+	PADDD ·chacha20Constants<>(SB), A0
+	PADDD ·chacha20Constants<>(SB), A1
+	PADDD ·chacha20Constants<>(SB), A2
+	PADDD ·chacha20Constants<>(SB), A3
+	PADDD state1Store, B0
+	PADDD state1Store, B1
+	PADDD state1Store, B2
+	PADDD state1Store, B3
+	PADDD state2Store, C0
+	PADDD state2Store, C1
+	PADDD state2Store, C2
+	PADDD state2Store, C3
+	PADDD ctr0Store, D0
+	PADDD ctr1Store, D1
+	PADDD ctr2Store, D2
+	PADDD ctr3Store, D3
 	MOVO  D3, tmpStore
 
 	// Load - xor - store
@@ -670,9 +778,9 @@ openSSETail256HashLoop:
 	MOVO C3, C0
 	MOVO tmpStore, D0
 
-	JMP openSSETail64DecLoop
+	JMP open_sse_64_bytes_remaining_store_plaintext
 
-openSSEFinalize:
+open_sse_finalize:
 	ADDQ ad_len+80(FP), acc0  // Hash length of additional data
 	ADCQ src_len+56(FP), acc1 // Hash length of ciphertext
 	ADCQ $1, acc2
