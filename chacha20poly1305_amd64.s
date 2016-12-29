@@ -79,7 +79,10 @@
 	PSHUFD $c1, C, C; \
 	PSHUFD $c2, D, D
 
-#define polyAdd(S) ADDQ S, acc0; ADCQ 8+S, acc1; ADCQ $1, acc2
+#define POLY1305_ADD(src, h0, h1, h2) \
+	ADDQ src, h0; \
+	ADCQ 8+src, h1; \ 
+	ADCQ $1, h2
 
 // The POLY1305_MUL makro is taken from the sum_amd64.s file in /x/crypto/poly1305
 #define POLY1305_MUL(h0, h1, h2, r0, r1, t0, t1, t2, t3) \
@@ -145,7 +148,7 @@ auth_additional_data_loop:
 	CMPQ itr2, $16
 	JB   auth_additional_data_finalize
 
-	polyAdd(0(adp))
+	POLY1305_ADD(0(adp), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 	LEAQ 16(adp), adp
@@ -261,7 +264,7 @@ open_sse_special_decrypt_verify_loop:
 	JB   open_sse_16_bytes_remaining
 	SUBQ $16, inl
 
-	polyAdd(0(inp))
+	POLY1305_ADD(0(inp), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 	MOVOU (inp), T0
@@ -366,7 +369,7 @@ open_sse_decrypt_verify_256_loop:
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B2, C2, D2)
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B3, C3, D3)
 
-	polyAdd(0(itr2))
+	POLY1305_ADD(0(itr2),acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ 16(itr2), itr2
 
@@ -386,7 +389,7 @@ open_sse_decrypt_verify_256_loop:
 	DECQ itr1
 	JGE  open_sse_decrypt_verify_256_loop
 
-	polyAdd(0(itr2))
+	POLY1305_ADD(0(itr2),acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ 16(itr2), itr2
 
@@ -483,7 +486,7 @@ open_sse_64_bytes_remaining:
 
 open_sse_64_bytes_remaining_decrypt_verify:
 	// Perform ChaCha rounds, while hashing the remaining input
-	polyAdd(0(inp)(itr2*1))
+	POLY1305_ADD(0(inp)(itr2*1), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	SUBQ $16, itr1
 
@@ -548,7 +551,7 @@ open_sse_128_bytes_remaining:
 
 open_sse_128_bytes_remaining_decrypt_verify:
 	// Perform ChaCha rounds, while hashing the remaining input
-	polyAdd(0(inp)(itr2*1))
+	POLY1305_ADD(0(inp)(itr2*1), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 open_sse_128_bytes_remaining_decrypt:
@@ -616,7 +619,7 @@ open_sse_192_bytes_remaining:
 
 open_sse_192_bytes_remaining_decrypt_verify:
 	// Perform ChaCha rounds, while hashing the remaining input
-	polyAdd(0(inp)(itr2*1))
+	POLY1305_ADD(0(inp)(itr2*1), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 open_sse_192_bytes_remaining_decrypt:
@@ -643,13 +646,13 @@ open_sse_192_bytes_remaining_decrypt:
 	CMPQ inl, $176
 	JB   open_sse_192_bytes_remaining_store_plaintext
 
-	polyAdd(160(inp))
+	POLY1305_ADD(160(inp), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 	CMPQ inl, $192
 	JB   open_sse_192_bytes_remaining_store_plaintext
 
-	polyAdd(176(inp))
+	POLY1305_ADD(176(inp), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 open_sse_192_bytes_remaining_store_plaintext:
@@ -718,7 +721,7 @@ open_sse_256_bytes_remaining_decrypt_verify:
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B2, C2, D2)
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B3, C3, D3)
 
-	polyAdd(0(inp)(itr2*1))
+	POLY1305_ADD(0(inp)(itr2*1), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 	MOVO C3, tmpStore
@@ -741,7 +744,7 @@ open_sse_256_bytes_remaining_decrypt_verify:
 	ANDQ $-16, itr1
 
 open_sse_256_bytes_remaining_verify:
-	polyAdd(0(inp)(itr2*1))
+	POLY1305_ADD(0(inp)(itr2*1), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	ADDQ $2*8, itr2
 	CMPQ itr2, itr1
@@ -893,7 +896,7 @@ sealSSE128SealHash:
 	// itr1 holds the number of bytes encrypted but not yet hashed
 	CMPQ itr1, $16
 	JB   sealSSE128Seal
-	polyAdd(0(oup))
+	POLY1305_ADD(0(oup), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 
 	SUBQ $16, itr1
@@ -1106,7 +1109,7 @@ seal_sse_encrypt_authenticate_256_loop:
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B2, C2, D2)
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B3, C3, D3)
 
-	polyAdd(0(oup))
+	POLY1305_ADD(0(oup), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ 16(oup), oup
 
@@ -1125,7 +1128,7 @@ seal_sse_encrypt_authenticate_256_loop:
 	DECQ itr2
 	JGE  seal_sse_encrypt_authenticate_256_loop
 
-	polyAdd(0(oup))
+	POLY1305_ADD(0(oup), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ (2*8)(oup), oup
 	DECQ itr1
@@ -1211,7 +1214,7 @@ seal_sse_64_bytes_remaining:
 
 sealSSETail64LoopA:
 	// Perform ChaCha rounds, while hashing the prevsiosly encrpyted ciphertext
-	polyAdd(0(oup))
+	POLY1305_ADD(0(oup), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ 16(oup), oup
 
@@ -1220,7 +1223,7 @@ sealSSETail64LoopB:
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B1, C1, D1)
 	CHACHA20_QROUND(A1, B1, C1, D1, T1)
 	CHACHA20_SHUF(0x93, 0x4E, 0x39, B1, C1, D1)
-	polyAdd(0(oup))
+	POLY1305_ADD(0(oup), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ 16(oup), oup
 
@@ -1255,7 +1258,7 @@ seal_sse_128_bytes_remaining:
 
 sealSSETail128LoopA:
 	// Perform ChaCha rounds, while hashing the prevsiosly encrpyted ciphertext
-	polyAdd(0(oup))
+	POLY1305_ADD(0(oup), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ 16(oup), oup
 
@@ -1264,7 +1267,7 @@ sealSSETail128LoopB:
 	CHACHA20_QROUND(A1, B1, C1, D1, T0)
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B0, C0, D0)
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B1, C1, D1)
-	polyAdd(0(oup))
+	POLY1305_ADD(0(oup), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ 16(oup), oup
 	CHACHA20_QROUND(A0, B0, C0, D0, T0)
@@ -1316,7 +1319,7 @@ seal_sse_192_bytes_remaining:
 
 sealSSETail192LoopA:
 	// Perform ChaCha rounds, while hashing the prevsiosly encrpyted ciphertext
-	polyAdd(0(oup))
+	POLY1305_ADD(0(oup), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ 16(oup), oup
 
@@ -1328,7 +1331,7 @@ sealSSETail192LoopB:
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B1, C1, D1)
 	CHACHA20_SHUF(0x39, 0x4E, 0x93, B2, C2, D2)
 
-	polyAdd(0(oup))
+	POLY1305_ADD(0(oup), acc0, acc1, acc2)
 	POLY1305_MUL(acc0, acc1, acc2, 0(BP), 8(BP), t0, t1, t2, t3)
 	LEAQ 16(oup), oup
 
